@@ -223,6 +223,21 @@ The agreement rate is itself data. A round where the two models agree on 90%+ of
 
 `pi auth check --provider minimax --model minimax/MiniMax-M3` returns "ready". The same for `minimax/MiniMax-M2.7-highspeed`. A bare `--model minimax` is interpreted as a different provider (huggingface) and fails with "No API key found for huggingface"; the correct pattern is `provider/model`, two segments. The full model catalog is in `/home/team/.local/node24/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/minimax.json`.
 
+### Per-reviewer output paths (do not collide)
+
+When spawning two reviewers on the same lens with two models, **each reviewer writes to a unique output path** (e.g. `/tmp/w12-r6-revA-m3.md`, `/tmp/w12-r6-revA-27hs.md`). If both write to the same file, the last writer wins and the orchestrator loses the independent reports it needs to compare.
+
+PR #96 W12-r6 spawned 4 reviewers (revA-m3, revA-27hs, revB-m3, revB-27hs) but the brief named only two output paths (`/tmp/w12-r5-reviewer-a.md`, `/tmp/w12-r5-reviewer-b.md`). The M3 and M2.7-highspeed reports overwrote each other; the orchestrator had to reconstruct the comparison from the `pilot.py wait` summaries (which captured the headline but lost the per-finding detail). The fix is in the brief template, not the launch command: each reviewer is given a path that includes its unit suffix.
+
+A template:
+
+```
+## Output
+Write your findings to `/tmp/<unit>-<lens>-<model>.md` (e.g. `/tmp/w12-r6-revA-m3.md`).
+```
+
+The orchestrator verifies the file exists after the run completes; if not, the wait summary is the fallback evidence.
+
 ## What you must not do
 
 - **Do not review.** When a subagent's evidence has a defect, the action is to spawn a meta-review, not to fix it yourself. Reading the diff to verify a citation is fine; reading the diff to find new defects is not.
