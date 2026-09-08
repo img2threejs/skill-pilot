@@ -81,6 +81,16 @@ also propose a fix, you own whether it compiles — a prescription to add a fiel
 declared writes would have tripped a duplicate-writer check, and the author was right to refuse it. A
 finding with no prescription is complete; a prescription that breaks the build costs a round.
 
+**Your prescription is the reviewer's intent, not the adjudicator's verification.** PR #96 W12-r3
+filed a "Tecnativa-style docker socket proxy" allow-list of four operations as a prescription;
+neither the adjudication nor the prior reviewer walked the containment adapter end-to-end against
+the list. The attack meta-reviewer caught the allow-list was actually six operations (reconciliation
+path), and a further four (create path) were missing when `submit()`'s reach was enumerated. The
+lesson: every prescription you file gets re-walked against the call sites by the meta-reviewer or
+by the prescription-verifier; a prescription that closes an example but not the rule is itself a
+defect. If your prescription enumerates operations, file the operation list and let the next pass
+verify it against the code; do not trust your own enumeration.
+
 ## One line per blocking finding, for the round after this one
 
 Every blocking finding ends with one line in this exact form:

@@ -106,6 +106,18 @@ another unit's territory, correctly signalled; something already filed.
 four seams shipped with a definition and a provider and no consumer, each with that promise attached.
 A deferral without an issue number is a deferral that does not happen.
 
+## 5b. Scope discipline — every prescription must land inside the unit's `touches`
+
+Read `work-split.json` for the unit's `touches`. For every prescription you file, confirm every
+file the prescription adds or edits is inside the declared scope. If not, the prescription expands
+the unit's surface and the orchestrator must amend `work-split.json` *before* the next round
+starts; an undisclosed scope expansion is a future collision waiting to happen.
+
+PR #96 W12-r3 added `deploy/studio/**` to the diff without amending `work-split.json`'s `touches`
+list. The round-4 attack reviewer caught this and filed it as a blocker for the orchestrator's
+decision. The lesson: a `touches` amendment is a work-split edit, not a PR comment. If the
+prescription needs new files, the amendment goes in the same PR as the prescription, not the next.
+
 ## The sweeps you owe yourself
 
 If every reviewer shares your model, run the three sweeps from `pi-reviewer` yourself before
