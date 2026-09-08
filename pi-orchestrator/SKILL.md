@@ -199,3 +199,17 @@ Before planning a round:
 5. The project's AGENTS.md and ARCHITECTURE-SPINE.md (know the rules before applying them).
 
 Then write the brief for each parallel reviewer. The brief is the contract: it names the lens, the file to read, the standard to apply, what to write, what not to touch. A reviewer whose brief is a copy of the orchestrator's plan will produce a reviewer that agrees with the plan; you want a reviewer that disagrees where the plan is wrong.
+
+## Confirm the post-fix diff exists before planning
+
+PR #96 W12-r4 was opened with the orchestrator's plan to verify the prescriptions, both reviewers confirmed that the post-fix diff did not exist (`git log <last-commit>..HEAD` returned zero commits), the round produced a precise baseline enumeration rather than a verdict, and the score fell below the continue threshold. The orchestrator's plan was built on an assumption the orchestrator did not verify: that the author had implemented the prescriptions.
+
+Before planning a round that depends on post-fix work, **the orchestrator runs `git log <prior-round-commit>..HEAD` on the PR branch and confirms there are new commits.** If the diff is empty, the round is invalid as planned. Three options:
+
+1. **Cancel the round.** The author's work has not landed; running the round produces a vacuous score and burns model credit. The orchestrator's job is to notice, not to waste reviewers.
+2. **Re-purpose the round as a baseline enumeration.** The reviewers' lenses can still produce a precise inventory of what the prescriptions must close (the docker operations the proxy must allow, the env vars the verifier must set, the comments the prescriptions must fix). The output becomes the baseline for the round that runs *after* the author implements. Score the round honestly (low, because no prescriptions to verify) and document the baseline.
+3. **Open the round with a different lens set.** If the prescriptions have not landed but the round is still useful, the lens set shifts to "elaborate the prescriptions more precisely" rather than "verify them." The two are different jobs and produce different evidence.
+
+The default is (1) with (2) as the runner-up. (3) is for the rare case where the prescriptions themselves are the round's deliverable, not the implementation.
+
+The principle: the orchestrator's plan must be grounded in evidence, not assumption. Verifying that the diff exists takes one command; running a round on a non-existent diff costs a reviewer.
