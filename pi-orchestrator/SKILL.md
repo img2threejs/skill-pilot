@@ -181,6 +181,48 @@ Per the project's standard, all PI runs the orchestrator spawns use `--model min
 
 When only one model is available, multi-lens passes substitute for multi-model reviews; the round count rises to compensate. When two models are available, the project convention (AGENTS.md) is two reviewers on different models per round; the orchestrator's job is then to keep them apart (different sessions, different briefs, no shared context) and to settle disagreements between them.
 
+## Dual-model parallel review (M3 + M2.7-highspeed)
+
+The orchestrator's standard mode is to spawn **two reviewers on the same brief with different models**: one on `minimax/MiniMax-M3`, one on `minimax/MiniMax-M2.7-highspeed`. The two produce independent samples of the same lens; the orchestrator compares the outputs, settles disagreements, and decides.
+
+### Why two models on the same lens
+
+A single model on a single lens produces one sample. The same lens on a second model produces a second sample. The two samples are not independent if both models share training data or architectural priors, but they are independent enough that the agreement set is high-confidence and the disagreement set is where the orchestrator's attention goes. Three reasons to keep the pair:
+
+- **Coverage.** M3 is the slower, deeper model; M2.7-highspeed is the faster, cheaper model. Spawning both on the same lens catches what M3 catches AND what M2.7-highspeed catches in the same wall-clock.
+- **Disagreement mining.** Where M3 and M2.7-highspeed disagree, the disagreement is exactly the "the reviewer's claim was on intent, not on the code" surface. The orchestrator walks the disagreement against the code, settles it, and either accepts the consensus or files the dissent as a finding.
+- **Cost calibration.** A model pair that agrees on every finding across multiple rounds is over-budgeted (one model would do). A model pair that disagrees on most findings is misconfigured (the briefs may be unclear). The orchestrator tracks the agreement rate per round and adjusts.
+
+### How to spawn the pair
+
+```sh
+# Same brief, two models, two sessions, two PIDs
+pilot.py start --unit <unit>-revA-m3 \
+  --task <kind> --model minimax/MiniMax-M3 \
+  --cwd <dir> --brief <brief-A>.md
+pilot.py start --unit <unit>-revA-27hs \
+  --task <kind> --model minimax/MiniMax-M2.7-highspeed \
+  --cwd <dir> --brief <brief-A>.md
+```
+
+The brief is identical for both reviewers; only the model string differs. The orchestrator does not tell the reviewer which model it is running on (the `--model` flag is a launch argument, not part of the brief). Each reviewer's session is independent (no shared context).
+
+### Comparing the outputs
+
+When both reviewers finish, the orchestrator:
+
+1. Reads both reports.
+2. Builds a finding-by-finding comparison table: which model caught which defect, where they agree, where they disagree.
+3. Settles disagreements by reading the code (the orchestrator's own walk, not by deferring to either reviewer).
+4. Files the consensus as the round's findings.
+5. Files significant dissents as worth-knowing items ("M3 caught this; M2.7-highspeed missed it" or vice versa).
+
+The agreement rate is itself data. A round where the two models agree on 90%+ of findings is over-budgeted; a round where they agree on 50% needs a closer look at the briefs.
+
+### Verifying the model string
+
+`pi auth check --provider minimax --model minimax/MiniMax-M3` returns "ready". The same for `minimax/MiniMax-M2.7-highspeed`. A bare `--model minimax` is interpreted as a different provider (huggingface) and fails with "No API key found for huggingface"; the correct pattern is `provider/model`, two segments. The full model catalog is in `/home/team/.local/node24/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/minimax.json`.
+
 ## What you must not do
 
 - **Do not review.** When a subagent's evidence has a defect, the action is to spawn a meta-review, not to fix it yourself. Reading the diff to verify a citation is fine; reading the diff to find new defects is not.
@@ -213,3 +255,24 @@ Before planning a round that depends on post-fix work, **the orchestrator runs `
 The default is (1) with (2) as the runner-up. (3) is for the rare case where the prescriptions themselves are the round's deliverable, not the implementation.
 
 The principle: the orchestrator's plan must be grounded in evidence, not assumption. Verifying that the diff exists takes one command; running a round on a non-existent diff costs a reviewer.
+
+## When to stop spawning rounds (the author bottleneck)
+
+PR #96 W12-r5 was the second consecutive round that produced a baseline-confirmation verdict (score 29/50, redo) because the post-fix diff was still empty. The orchestrator's instinct was to spawn round 6 with the same lens set, on the assumption that a third pass would either land a verdict or surface a new defect. Neither held: round 6 would produce the same baseline-confirmation finding as rounds 4 and 5.
+
+The orchestrator's job is forward progress. When two consecutive rounds produce the same baseline-confirmation finding, the bottleneck is the author, not the reviews. **The orchestrator stops spawning rounds** and pauses until the author lands work. The resume protocol is `git log <prior-round-commit>..HEAD` again — when the diff is non-empty, the cycle resumes.
+
+Three signals that the bottleneck has shifted from the reviews to the author:
+
+1. **Two consecutive rounds with the same score** and the same headline finding. Different rounds, different reviewers, same score, same headline — the reviewer process is not producing new information.
+2. **A round's headline is "the diff is empty."** Once a round's main finding is the absence of the diff, every subsequent round with the same lens set will produce the same finding.
+3. **The resume trigger is external.** The orchestrator cannot make the author implement; only the author can. Stopping is not failure; it is the orchestrator recognising the boundary of its authority.
+
+When the orchestrator stops, the action is:
+
+- Document the state honestly (`score.json` with `decision: "stop"` and the resume protocol).
+- Update the prior adjudication with the round outcomes (so the next round has a continuous record).
+- Tell the user / the operator the pause is deliberate, not a failure.
+- Save model credit for the round that will actually land a verdict.
+
+Spawning round 6 anyway, on the basis that "another pass might catch something," is the same anti-pattern as a CI runner that retries on green tests until the budget runs out. The fix is to recognise the bottleneck has moved, not to retry the same loop.
