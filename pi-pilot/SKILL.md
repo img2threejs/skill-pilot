@@ -17,15 +17,15 @@ from an instrument improvised at the prompt, and the improvised instrument alway
 work already in flight.
 
 ```sh
-python3 pilot.py selftest                       # before believing any negative answer
-python3 pilot.py status                         # what is live, measured
-python3 pilot.py start --unit W3 --task implement \
+python3 ./pilot.py selftest                       # before believing any negative answer
+python3 ./pilot.py status                         # what is live, measured
+python3 ./pilot.py start --unit W3 --task implement \
         --cwd /path/to/worktree --brief /path/to/brief.txt
-python3 pilot.py start --unit W3 --task review \
+python3 ./pilot.py start --unit W3 --task review \
         --cwd /path/to/worktree --brief /path/to/brief.txt   # --task is a free label, not a mode
-python3 pilot.py wait <run-id> --lines 80       # run this as a tracked job
-python3 pilot.py log  <run-id> --lines 80       # read the file, never a live pipe
-python3 pilot.py stop <run-id>
+python3 ./pilot.py wait <run-id> --lines 80       # run this as a tracked job
+python3 ./pilot.py log  <run-id> --lines 80       # read the file, never a live pipe
+python3 ./pilot.py stop <run-id>
 ```
 
 `start` refuses a second run for the same `--unit`/`--task` while one is live. That refusal is the
