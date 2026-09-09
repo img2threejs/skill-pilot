@@ -459,6 +459,92 @@ The default is (1) with (2) as the runner-up. (3) is for the rare case where the
 
 The principle: the orchestrator's plan must be grounded in evidence, not assumption. Verifying that the diff exists takes one command; running a round on a non-existent diff costs a reviewer.
 
+## Decision under uncertainty — the debate protocol
+
+When the orchestrator faces a decision with multiple defensible answers and no clear winner — typically a scope question ("should this be a separate unit, a triage iteration, or deferred to a later unit?") or a design question ("should this be option A or B?") — single-pass review is not enough. Different lenses will see different evidence; the disagreement is the data.
+
+The debate protocol:
+
+### Triggers
+
+- The orchestrator is paused and the user signals "I don't know, you decide" or equivalent.
+- The decision has trade-offs that no single lens can resolve (e.g., scope vs velocity vs correctness).
+- A previous round's reviewer flagged "this requires a design discussion" or similar.
+
+### Shape
+
+Spawn **at least 3 agents** with **different models** and **different edges**:
+
+- Each agent writes a **position paper** arguing for one of the answers. The position paper is a substantive document, not a one-liner: it cites file:line evidence, names the trade-offs, and concludes with a recommendation.
+- **Round 2**: each agent reads the OTHER agents' position papers and writes a **rebuttal** that names the strongest claim of each opposing position and the counter-evidence.
+- **Round 3 (optional)**: each agent reads the rebuttals and writes a **final position** that may concede ground or hold firm. Useful when Round 2 produces new evidence; skip if Round 2 reaches consensus.
+- **Judge**: spawn a fourth agent on a **different model** than the three debaters, with the brief "read all positions and rebuttals; write a recommendation." The judge does NOT debate; it evaluates.
+
+### Models and edges
+
+The three debaters should use **different models** so the samples are not the same model twice. The pi-pilot catalog ships `minimax/MiniMax-M3` (slow, deep) and `minimax/MiniMax-M2.7-highspeed` (fast, cheap). Two more models are accessible if the orchestrator's host has them: `anthropic/claude-sonnet-4` and `google/gemini-2.5-pro`. Check the catalog with `cat /home/team/.local/node24/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data/*.json`.
+
+The three debaters' **edges** should be different, not just their models. Common edges for scope/design questions:
+
+- **Architecture lens**: structural integrity, boundary-checker compliance, AD-by-AD walk, seam-completeness rule.
+- **Workflow lens**: project conventions, prior-unit patterns, work-split.json discipline, scope-discipline rule.
+- **Process lens**: cost-benefit, time-to-merge, reviewer-quality differential, dual-model calibration.
+- **Risk lens**: what failure modes the chosen path enables or closes.
+- **Latent defect lens**: what defects remain unobserved by each path.
+
+A common decomposition for a scope question (separate unit vs triage vs defer):
+
+- Agent A: architecture lens — argues for the structurally cleanest path.
+- Agent B: workflow lens — argues for the path that matches the project's prior patterns.
+- Agent C: risk/process lens — argues for the path with the lowest coordination cost.
+
+Each agent writes a position paper from their edge, not from their model. The model gives a second sample; the edge gives the lens.
+
+### Output structure (per agent)
+
+Position paper:
+1. **Headline.** One sentence: "X is correct" with the strongest single claim.
+2. **Estimate of size / scope.** Lines of code, files touched, migrations, tests. Cite `wc -l` for migrations, `grep -c` for the surface area.
+3. **Unit boundary analysis.** What the chosen scope owns vs what it excludes. Cite work-split.json's `touches`.
+4. **Risks of this path.** Specific failure modes. Cite where the prior round hit similar defects.
+5. **Counter-arguments.** What the opposing positions would say; why this position wins despite them.
+
+Rebuttal (Round 2):
+1. **Strongest claim of each opposing position.** Cite the line.
+2. **Counter-evidence.** What the rebuttal's evidence does or doesn't refute.
+3. **Concession or hold.** Does this position concede ground, or hold firm?
+
+Final position (Round 3, optional):
+1. **Updated recommendation** after seeing all rebuttals.
+2. **What changed** vs the initial position.
+
+### Judge's output
+
+1. **Headline.** The recommendation (separate-unit / triage / defer / etc.).
+2. **Per-position: strongest claim, weakest claim.** Cite the evidence.
+3. **Cross-position agreement.** What all positions agree on.
+4. **Cross-position disagreement.** Where they disagree and which has stronger evidence.
+5. **Recommendation.** The position with the strongest evidence, with the trade-off named.
+6. **Conditions.** What would change the recommendation.
+
+### Orchestrator's decision
+
+The judge is an input, not a verdict. The orchestrator reads the judge, the positions, the rebuttals, and decides. The orchestrator's decision is recorded in the score.json's `orchestrator_decisions` block with the trade-off and the alternative that was rejected.
+
+### Cost
+
+Each debate round costs **3 debaters + 1 judge** = 4 PI runs. Round 1 typically 2-5 minutes per agent; Round 2 a bit longer; judge 2-4 minutes. Wall-clock for a 3-round debate: 15-25 minutes. PI credit roughly proportional.
+
+The debate is worth it when the decision is reversible (no irreversible state has been set) AND the alternative answers are not obvious. The debate is NOT worth it when:
+
+- One answer is clearly correct given the evidence.
+- The decision is irreversible (e.g., deleting a branch).
+- The orchestrator's user has already given a clear instruction.
+
+### Distillation
+
+After the decision lands, capture the lesson in this skill: what edge caught what the others missed, where the model-difference helped, what would have been missed by single-pass review. Add the lesson to the existing rubric sections ("Line references in comments drift", "Widening an interface breaks every implementation") or create a new section if the lesson is novel.
+
 ## When to stop spawning rounds (the author bottleneck)
 
 PR #96 W12-r5 was the second consecutive round that produced a baseline-confirmation verdict (score 29/50, redo) because the post-fix diff was still empty. The orchestrator's instinct was to spawn round 6 with the same lens set, on the assumption that a third pass would either land a verdict or surface a new defect. Neither held: round 6 would produce the same baseline-confirmation finding as rounds 4 and 5.
