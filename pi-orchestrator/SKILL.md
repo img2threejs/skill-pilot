@@ -467,6 +467,23 @@ The default for review rounds is dual-model (M3 + M2.7-highspeed on the same bri
 - **Single file**: no cross-file regression surface.
 - **No new dependencies**: the fix does not introduce new modules, ports, or imports.
 
+Single-model deviation is documented in the round's `score.json` `notes` field with the reason (which threshold the fix met). The deviation does not affect the score's other dimensions.
+
+### Cast hacks on branded types (recurring defect class)
+
+A `as unknown as` cast on a branded type is a recurring defect class the orchestrator's reviewers keep catching. The pattern:
+
+- Round 3 W12 (composition.exercise.ts): `as unknown as TierThreeSecurityEventStream & SecurityEventStream` — the test stub forged the brand because the test could not legitimately mint it. Reviewer A caught it; the fix was to relax the production code's contract so the stub doesn't have to forge.
+- Round 1 W13 (gateway-metering.ts): `authoriseRead(scope as unknown as ReadContext, usage)` — the adapter forged the `ReadContext` brand because it never had access to the mint that lives in the core. Reviewer A caught it; the fix was to remove the auth call from the adapter (auth lives in the core).
+
+**Why this keeps happening.** The orchestrator's coder briefs reference the project's types but don't explicitly warn against `as unknown as` on branded types. The coders copy patterns from adjacent code (round 3 W12's forged TierThree becomes round 1 W13's forged ReadContext). Reviewers catch the second and third instance, not the first.
+
+**The brief template for any adapter coder must include:**
+
+> **No `as unknown as` casts on branded types.** Branded types (e.g., `TierThreeSecurityEventStream`, `ReadContext`, `AttemptCorrelationId`) are minted by exactly one function in the core. If your code cannot legitimately obtain a value of that type, your design is wrong — fix the design, do not cast around it. The boundary checker's `tsc --noEmit` will not catch the lie (it sees the brand shape, not the runtime value); only a reviewer walking the call path with `scope.principal` undefined will.
+
+This clause in the brief has caught the same defect twice already. It is captured here so the orchestrator's brief templates for adapter work carry it forward.
+
 If any of these is false, dual-model. The threshold is not about the reviewer's value; it is about the cost-benefit ratio. A 4-line comment fix reviewed by two models produces ~5 minutes of model credit for negligible additional confidence. A 200-line new-port fix reviewed by one model produces a single-model's blind-spot risk that dual-model catches.
 
 Single-model deviation is documented in the round's `score.json` `notes` field with the reason (which threshold the fix met). The deviation does not affect the score's other dimensions.
