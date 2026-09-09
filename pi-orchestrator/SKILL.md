@@ -285,6 +285,34 @@ The lessons from each round are inputs to the next round, not to a future skill 
 
 `pi-distil` exists because skills that are only ever added to become skills that are not read. Doing the distillation immediately after the round that produced the lesson is what keeps the rules in the skills current with the rounds that paid for them.
 
+## Per-round closeout checklist (post-comment + evidence before continuing)
+
+Every round — coder round, review round, debate round, decision round — closes the same way. **Before the orchestrator picks up the next task, the round's evidence must be:**
+
+1. **Saved locally** in `/tmp/` or under the project's evidence dir (`<project>/_bmad-output/.../rounds/<unit-rN>/`):
+   - Brief the orchestrator wrote
+   - All reviewer / rebuttal / position papers
+   - All judge summaries
+   - All meta-reviews or corrections
+   - The round's `score.json` with `rounds[]`, `orchestrator_decisions[]`, `meta_reviews[]`
+2. **Posted as a comment** on the relevant GitHub surface:
+   - Issue fixes: comment on the issue with branch + commit + score + evidence file paths. Do NOT close the issue.
+   - Unit work: open or update a PR against `staging` (or `main` if the orchestrator's workflow has that as the merge target) and comment with the same fields.
+   - Debates: comment on the issue the debate resolved, with the full evidence trail (positions + rebuttals + judge).
+3. **Distilled into skills**:
+   - If the round produced a new lesson (defect class the existing rules miss), edit the appropriate skill file. Each rule needs the case that produced it.
+   - Commit the skill change with the round's evidence as the message body.
+4. **Memory updated**: the project's `ORCHESTRATOR-NOTES.md` records the round's outcome and decisions. Commit to the staging branch.
+
+**Why the closeout comes before continuing:** continuing without closing means the next round's orchestrator inherits a half-recorded history. The reviewer's comment was made; the comment is the record. Without the comment, the next orchestrator (or the user, reviewing at weekend) reads the diff but cannot reconstruct why the diff is the way it is. The comment is the only human-readable bridge between the diff and the evidence files.
+
+**Common closeout failure modes** (each observed at least once):
+- *Forgetting the issue comment*: the orchestrator merges to staging but never posts the issue comment. The issue stays open with no narrative; the user at weekend reads the issue and the staging diff but cannot connect them.
+- *Forgetting to commit the ORCHESTRATOR-NOTES update*: the notes file lives in the worktree but the orchestrator merges without committing the notes update. Next session's orchestrator reads a stale state.
+- *Forgetting the skill update*: a lesson emerged from this round but the orchestrator moves on without editing the skill. The next round pays for the same lesson.
+
+The orchestrator's discipline: **round closes = evidence saved + comment posted + skill updated + memory committed + next task.** Skipping any step is a defect the user will catch at weekend review.
+
 ## The "What I could not check" discipline
 
 Every evidence file ends with one. The orchestrator's adjudication has one; the meta-reviews have one; the prescription verifier has one. The list is short by design — a long list is the score's tell that the verifier was dutiful, not honest.
