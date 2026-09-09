@@ -103,6 +103,42 @@ git worktree add <worktree-path> <first-task-name>
 
 The orchestrator runs this once at the start of a project and never re-runs it (the staging branch persists). Subsequent tasks start at step 3.
 
+### Per-task PR flow (mandatory from each new task onwards)
+
+Every task branch that lands in staging goes through a **pull request against staging**, not a direct merge. The orchestrator opens the PR before closing the task (per the per-round closeout checklist at `d84570e`).
+
+The flow is:
+
+```sh
+# 1. Fork from staging and work
+git checkout staging
+git checkout -b <task-name>
+git push -u origin <task-name>
+# ... commit + push per round ...
+
+# 2. Open PR against staging (NOT against master; master merges are PR #97-style consolidated)
+gh pr create --base staging --head <task-name> \
+  --title "<unit-or-issue>: <short summary>" \
+  --body "<per-round summary, evidence index, scores, reviewer corrections>"
+
+# 3. The orchestrator merges the PR into staging via gh (not via git merge)
+gh pr merge <pr-number> --merge --delete-branch
+```
+
+The orchestrator merges the PR into staging via `gh pr merge` (not via `git merge --no-ff`). The `--merge` flag creates a merge commit on staging; `--delete-branch` removes the task branch after merge. `--squash` is NOT used — squash collapses the per-round commits and loses the round traceability the orchestrator has been building.
+
+**Why this flow** (not direct `git merge --no-ff`):
+
+- **Traceability.** Each task gets a PR with a number, comments, and a merge SHA. The git log alone does not tell the story of which branches merged; PRs do.
+- **Review surface.** The user reviews tasks at weekend by walking the PR list against staging, not by parsing `git log`.
+- **Reversibility.** A bad task can be reverted by reverting the PR; a direct merge is harder to identify.
+- **Consistency with PR #97.** The session PR #97 (staging → main) accumulates completed task PRs; each task PR feeds into it.
+
+**Migration from earlier sessions.** PRs opened before this skill update were merged via `git merge --no-ff` directly to staging. That was a workflow gap; future tasks use the PR flow. The earlier merges are still tracked in `ORCHESTRATOR-NOTES.md` and the per-round summaries; the user can review them via `git log staging` or by re-creating PRs if needed.
+
+The orchestrator's per-round closeout checklist (`d84570e`) now includes:
+- Step 5 (new): **open the PR against staging** if not already open, and merge it.
+
 ### Issues, branches, PRs — the linkage
 
 For each task, the orchestrator maintains a mapping:
