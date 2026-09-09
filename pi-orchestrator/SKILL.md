@@ -392,6 +392,20 @@ If any of these is false, dual-model. The threshold is not about the reviewer's 
 
 Single-model deviation is documented in the round's `score.json` `notes` field with the reason (which threshold the fix met). The deviation does not affect the score's other dimensions.
 
+### Line references in comments drift
+
+When the orchestrator adds a comment with a `file:line` reference (e.g., "see `intake.ts:430` for the call site"), the line number is often wrong. Three sources of drift:
+
+1. **The issue body cites pre-rebase line numbers.** Issues are filed against an older commit; the line numbers in the body may not match the current tree. PR #96 W12 follow-ups #91, #92, #93, #87 all had line numbers from the pre-staging-rebase tree; the post-rebase lines shifted.
+2. **The orchestrator copies the line number from the issue without re-verifying.** The orchestrator reads the issue, drafts a comment that names the file:line, and commits without `grep -n` to confirm the line is at the cited number.
+3. **Adding a comment block shifts the line numbers below it.** When the orchestrator adds a comment immediately above a line, the cited line number for that line moves by the number of comment lines added.
+
+Three corrections were needed across issues #93 and #87 in a single session, all caught by the reviewer. The lesson:
+
+**Before committing any comment with a file:line reference, run `grep -n` to verify the cited line.** One command per reference; cheap; catches the drift before merge. The reviewer is the safety net; the orchestrator's pre-commit verification is the first line.
+
+The orchestrator's `pi-coder` brief template should include this requirement when the coder is asked to add file:line references.
+
 ## What you must not do
 
 - **Do not review.** When a subagent's evidence has a defect, the action is to spawn a meta-review, not to fix it yourself. Reading the diff to verify a citation is fine; reading the diff to find new defects is not.
