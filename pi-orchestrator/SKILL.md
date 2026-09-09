@@ -350,6 +350,21 @@ Per the project's standard, all PI runs the orchestrator spawns use `--model min
 
 When only one model is available, multi-lens passes substitute for multi-model reviews; the round count rises to compensate. When two models are available, the project convention (AGENTS.md) is two reviewers on different models per round; the orchestrator's job is then to keep them apart (different sessions, different briefs, no shared context) and to settle disagreements between them.
 
+## Commit author — always `kokorolx <kokoro.lehoang@gmail.com>`
+
+Every commit the orchestrator makes — directly or via spawned subagents — is authored as `kokorolx <kokoro.lehoang@gmail.com>`. No AI co-author footers (`Co-authored-by: …`), no `Signed-off-by:` trailers, no `Generated with` lines. The orchestrator configures this globally before any commit:
+
+```sh
+git config --global user.name "kokorolx"
+git config --global user.email "kokoro.lehoang@gmail.com"
+```
+
+This applies to the orchestrator's own commits AND to every coder/reviewer/debate agent's commit. When the orchestrator rewrites history (e.g., `git filter-branch` to fix an author on past commits), the env-filter sets both `GIT_AUTHOR_*` and `GIT_COMMITTER_*` to the same identity. Backup refs created by `filter-branch` (`.git/refs/original/`) are deleted after the rewrite so `git log --all` does not show the old author on dangling commits.
+
+**Why this rule**: the user reviews the work at weekend and reads the git log. A log full of `orchestrator@local` and `Co-authored-by: AI` trailers says "an AI did this", which is what the user does NOT want. The git log should look like the work was done by one person (kokorolx), because the user's name is the one that matters for the project's review chain.
+
+When the orchestrator detects that a spawned agent's commit has the wrong author or has added an AI footer, the orchestrator's closeout checklist (`d84570e`) requires re-authoring or amending before continuing. The cost is small; the alternative is a git log that reads as AI-generated, which defeats the project's intent.
+
 ## Dual-model parallel review (M3 + M2.7-highspeed)
 
 The orchestrator's standard mode is to spawn **two reviewers on the same brief with different models**: one on `minimax/MiniMax-M3`, one on `minimax/MiniMax-M2.7-highspeed`. The two produce independent samples of the same lens; the orchestrator compares the outputs, settles disagreements, and decides.
