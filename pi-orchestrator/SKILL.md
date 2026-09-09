@@ -166,6 +166,30 @@ The orchestrator does the merge to staging immediately (the user instructed so),
 - The rebase is mechanical and safe; the force-push is the only risky step, and `--force-with-lease` makes it auditable.
 - Changing the PR base on GitHub is a separate operation from the rebase; the orchestrator does both.
 
+## Picking the next issue (the orchestrator's selection rubric)
+
+When the orchestrator's current task is paused or done, the next action is to pick an issue from the project's issue list and drive it through the workflow. The rubric:
+
+1. **Critical-path first.** Issues whose resolution unblocks future units. Per `work-split.json`, the units form waves A through H; pick an issue whose fix lands in the next wave's work.
+2. **Same unit, smallest fix.** Issues filed as "follow-up" from a recent merged PR are usually well-scoped and have a known fix shape. These are good first picks because the orchestrator has the recent adjudication as evidence.
+3. **One PR per fix shape.** A PR that addresses one issue is reviewable in five minutes. A PR that bundles ten issues is reviewable in an hour; bundling is a coordination cost, not a saving. **The default is one issue per PR**, with explicit exceptions (e.g., when several issues share the same file and would otherwise conflict).
+4. **Skip issues whose fix requires design discussion.** If the issue says "consider" or "evaluate" or "decide between", it is a design issue, not an implementation issue. The orchestrator's job is to drive implementation; design issues are parked until a unit owns them.
+5. **Skip issues whose owner is unclear.** If the issue does not name a unit, the orchestrator opens a task to assign an owner, then parks the issue until the owner is named.
+
+When in doubt, pick the smallest well-scoped issue filed against the most recently merged unit. The workflow tests itself on small fixes; large fixes amplify orchestrator errors.
+
+After picking, the orchestrator's actions are:
+
+1. **Read the issue body and any comments.** Note the file:line citations and the expected fix shape.
+2. **Read the related code end-to-end.** The orchestrator does the walk; the coder subagent gets the brief.
+3. **Spawn a coder subagent** with the issue body and the orchestrator's walk as evidence. The coder writes the fix.
+4. **Spawn a reviewer subagent** with the brief: "verify the fix closes the issue, did not regress siblings, no new defects."
+5. **Adjudicate** (or the orchestrator does it). Score per the rubric.
+6. **Merge to staging** when score ≥ 40.
+7. **Post a comment on the issue** with the branch, PR, score, adjudication, status. Do NOT close the issue; the user closes it at weekend review.
+
+If the orchestrator finds no issues whose selection passes the rubric, the orchestrator pauses and tells the user. The user's next instruction may be "do W6", "do W13", or "fix the highest-leverage issue regardless of selection rubric" — the orchestrator follows the instruction.
+
 ## Confidence scoring — every round, every time
 
 ```
