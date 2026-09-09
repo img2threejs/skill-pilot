@@ -49,6 +49,85 @@ Score (orchestrator)
   └─ score < 30 ─────────► round 2 + parallel-agent lens-check + round 3 expected
 ```
 
+## Branch workflow: master → staging → task branches
+
+The orchestrator works on a project repo with three layers of branches:
+
+- **`master`** (or `main`, depending on the project): the canonical source of truth. Protected.
+- **`staging`**: an integration branch that accumulates completed work. Created once, branched off master, pushed to origin. Receives merges from task branches when they finish.
+- **`<task-name>`** (e.g., `unit/W12-intake`, `fix/round-3-prescriptions`, `unit/W3-r4`): per-task branches that fork from `staging`. Work happens here. When the task is done, the orchestrator merges the task branch into `staging` and the next task forks from the now-updated staging.
+
+### Lifecycle
+
+1. **Setup (one-time per repo).** Create `staging` from master: `git checkout main && git checkout -b staging && git push -u origin staging`. The orchestrator runs this once when starting to work on a new repo.
+
+2. **New task.** Orchestrator creates a task branch from `staging`: `git fetch origin && git checkout staging && git checkout -b <task-name>`. The branch name carries the work's identity (unit number, fix purpose, etc.). The task branch pushes to origin as a worktree.
+
+3. **Work happens.** Code, reviews, decisions, evidence files all land in the task branch (or in worktrees pointing at it). The orchestrator scores each round and decides per the standard workflow above.
+
+4. **Task done.** Orchestrator merges the task branch into `staging` locally: `git fetch origin && git checkout staging && git merge --no-ff <task-name>`. The merge is fast-forwarded only if staging has not advanced; otherwise a merge commit records the integration.
+
+5. **Issues stay open.** The orchestrator does NOT close related issues when a task branch lands. Instead, the orchestrator mentions the branch and PR in the issue's comments. The user reviews the issue at the weekend, decides whether the branch is the closure or whether the issue is still open, and closes the issue themselves. The orchestrator's job is to keep the issues informative, not to close them.
+
+### Why this shape
+
+- **`staging` as integration.** A PR against master must be green. The task branch may be red (work-in-progress). `staging` is where the orchestrator confirms the integration works before proposing a PR to master. Two completed task branches merge cleanly into staging; conflicts between them surface at the staging merge, not at the master PR.
+
+- **Task branches fork from staging, not master.** This way, each new task starts with all completed work in the integration layer. A task that depends on a previous task's work (e.g., a fix round that depends on the round 3 review's decisions) starts with those decisions already in staging.
+
+- **No orphan branches.** A task branch that becomes obsolete (the user redirected the work) is deleted, not left to rot. The orchestrator's `git worktree list` shows the live worktrees; anything not listed is either merged or deleted.
+
+### Orchestrator's per-repo setup script
+
+When the orchestrator starts work on a new project repo, the one-time setup is:
+
+```sh
+# 1. fetch main
+git fetch origin main:main
+
+# 2. create staging if it does not exist
+if ! git show-ref --verify --quiet refs/heads/staging; then
+  git checkout main
+  git checkout -b staging
+  git push -u origin staging
+fi
+
+# 3. create the first task branch from staging
+git checkout staging
+git checkout -b <first-task-name>
+git push -u origin <first-task-name>
+
+# 4. create a worktree for the task
+git worktree add <worktree-path> <first-task-name>
+```
+
+The orchestrator runs this once at the start of a project and never re-runs it (the staging branch persists). Subsequent tasks start at step 3.
+
+### Issues, branches, PRs — the linkage
+
+For each task, the orchestrator maintains a mapping:
+
+- **Issue** (`#N`): the user's problem statement. Stays open until the user closes it.
+- **Branch** (`<task-name>`): the work. Created from staging, merged back to staging.
+- **PR** (if any): a GitHub PR against master. Optional. The orchestrator creates a PR when:
+  - The task branch should be reviewable on GitHub (for the user to see in the web UI), OR
+  - The task has hit `score >= 40` and is ready for the user's weekend review.
+
+The orchestrator does NOT auto-close issues on PR merge. The user closes issues on the weekend based on their own review of the branch/PR. The orchestrator's job is to keep the issue's comments up to date with the branch and PR reference.
+
+A typical comment template on an issue, posted when a task is done:
+
+```
+Branch: <task-name>
+PR: <pr-url> (if any)
+Score: <X>/50
+Adjudication: <path-to-decision-file>
+Status: <ship | send-back | stop>
+Notes: <one-paragraph summary>
+```
+
+The user reads the branch, the PR (if any), the adjudication, and decides whether to close the issue or open another round.
+
 ## Confidence scoring — every round, every time
 
 ```
