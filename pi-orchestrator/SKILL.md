@@ -128,6 +128,44 @@ Notes: <one-paragraph summary>
 
 The user reads the branch, the PR (if any), the adjudication, and decides whether to close the issue or open another round.
 
+### Changing the base of an open PR mid-stream
+
+PR #96 was opened against `main` before the staging workflow existed. When the orchestrator adopted the staging workflow mid-task, the PR's base had to change. The change is:
+
+1. **Fetch and rebase the task branch onto the new base:**
+   ```sh
+   git fetch origin
+   git rebase staging <task-name>
+   ```
+   The rebase replays the task branch's commits on top of `staging`. Commit SHAs change; review comments pointing at specific commits invalidate; force-push is required.
+
+2. **Force-push the rebased branch:**
+   ```sh
+   git push origin <task-name> --force-with-lease
+   ```
+   `--force-with-lease` (not `--force`) checks that the remote has not been updated since the local fetch; if it has, the push is refused and the orchestrator must reconcile before pushing.
+
+3. **Change the PR's base ref on GitHub:**
+   ```sh
+   gh pr edit <pr-number> --base staging
+   ```
+   Or via the REST API if `gh pr edit` does not support the field on the current version (the case for PR #96; the API call was used).
+
+4. **Merge the task branch into staging:**
+   ```sh
+   git checkout staging
+   git merge --no-ff <task-name>
+   git push origin staging
+   ```
+
+The orchestrator does the merge to staging immediately (the user instructed so), not at the round close. The reason: the task's work was complete; the review verdict was "stop until author lands post-fix" but the work-in-staging was sound. Merging into staging brings the work into the integration layer where the next task can fork from it.
+
+**Lessons from PR #96's rebase:**
+
+- The orchestrator should adopt the staging workflow BEFORE opening any PR, not after. Mid-stream base changes are possible but they invalidate GitHub PR review threads.
+- The rebase is mechanical and safe; the force-push is the only risky step, and `--force-with-lease` makes it auditable.
+- Changing the PR base on GitHub is a separate operation from the rebase; the orchestrator does both.
+
 ## Confidence scoring — every round, every time
 
 ```
