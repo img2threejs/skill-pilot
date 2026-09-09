@@ -379,6 +379,19 @@ Write your findings to `/tmp/<unit>-<lens>-<model>.md` (e.g. `/tmp/w12-r6-revA-m
 
 The orchestrator verifies the file exists after the run completes; if not, the wait summary is the fallback evidence.
 
+### When to use single-model instead of dual-model
+
+The default for review rounds is dual-model (M3 + M2.7-highspeed on the same brief). For trivial fixes, single-model is acceptable as a cost-saving deviation:
+
+- **Cosmetic-only changes**: comment removal, rename, formatting. No code-path change.
+- **< 10 lines of diff**: the fix is mechanical; the reviewer walk is short.
+- **Single file**: no cross-file regression surface.
+- **No new dependencies**: the fix does not introduce new modules, ports, or imports.
+
+If any of these is false, dual-model. The threshold is not about the reviewer's value; it is about the cost-benefit ratio. A 4-line comment fix reviewed by two models produces ~5 minutes of model credit for negligible additional confidence. A 200-line new-port fix reviewed by one model produces a single-model's blind-spot risk that dual-model catches.
+
+Single-model deviation is documented in the round's `score.json` `notes` field with the reason (which threshold the fix met). The deviation does not affect the score's other dimensions.
+
 ## What you must not do
 
 - **Do not review.** When a subagent's evidence has a defect, the action is to spawn a meta-review, not to fix it yourself. Reading the diff to verify a citation is fine; reading the diff to find new defects is not.
