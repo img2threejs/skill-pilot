@@ -406,6 +406,26 @@ Three corrections were needed across issues #93 and #87 in a single session, all
 
 The orchestrator's `pi-coder` brief template should include this requirement when the coder is asked to add file:line references.
 
+### Widening an interface breaks every implementation
+
+When the orchestrator adds a new member to an interface (e.g., adding `close(): Promise<void>` to `SecurityEventStream`), every structural-type implementation of the interface must also implement the new member. In a TS project this is caught by `tsc --noEmit`; in a project without TS, by the runtime call. PR #96 issue #79 fix in commit `9bc3b36` broke 4 implementations:
+
+- `src/core/pipeline/intake.exercise.ts:232`
+- `src/core/pipeline/reconcile.exercise.ts:143`
+- `src/core/pipeline/session-end.exercise.ts:148`
+- `src/main/composition.exercise.ts:235` (via `as unknown as` cast)
+
+The orchestrator assumed only 2 implementations (in-memory + postgres-backed) but missed the test stubs and the `as unknown as` cast.
+
+Two mitigations:
+
+1. **Enumerate every implementation before widening.** Grep for the interface name across the project (`grep -rn "SecurityEventStream"`), list every file that implements it, and confirm each will satisfy the new shape. If any would not, decide whether to update them, mark the new member optional, or split the interface.
+2. **Mark the new member optional when unsure.** `close?(): Promise<void>` instead of `close(): Promise<void>` is structurally compatible with implementations that do not provide the member. Production providers implement it; test stubs do not have to.
+
+The first is preferable when the new member is essential to the contract. The second is preferable when the new member is a lifecycle hook and the contract's primary surface (append, readAll) is unchanged.
+
+When the orchestrator's first commit introduces a breaking shape, the second commit corrects it. The reviewer is the safety net; the orchestrator's pre-commit verification (grep + tsc) is the first line.
+
 ## What you must not do
 
 - **Do not review.** When a subagent's evidence has a defect, the action is to spawn a meta-review, not to fix it yourself. Reading the diff to verify a citation is fine; reading the diff to find new defects is not.
