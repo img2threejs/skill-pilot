@@ -661,3 +661,58 @@ When the orchestrator stops, the action is:
 - Save model credit for the round that will actually land a verdict.
 
 Spawning round 6 anyway, on the basis that "another pass might catch something," is the same anti-pattern as a CI runner that retries on green tests until the budget runs out. The fix is to recognise the bottleneck has moved, not to retry the same loop.
+
+## W16 closure — captured lessons
+
+W16 (e2e harness + restart mid-job + 10 images + hand inspection) shipped across 4 rounds. Five lessons emerged that future rounds should encode:
+
+### 1. Scope discipline: fixtures must not trigger adjacent clauses
+
+AD-28 reconciliation has two directions:
+- Direction A — running Attempt, no live boundary → interruptAttempt.
+- Direction B — live boundary, no running Attempt → Boundary.destroy.
+
+W16 round 2 was scoped to clause 2 (Direction A only). The original fixture seeded `liveBoundaries: [orphanUnrelatedBoundary]`, which fired Direction B alongside Direction A. Reviewer B caught the bleed before merge. The fix was `liveBoundaries: []` and removing the Direction B fixture.
+
+**Rule:** when scoping a round to a specific `done_when` clause, the test fixture must NOT trigger adjacent clauses. If the round touches two clauses, split into two rounds, OR explicitly document why both clauses fire together and the assertions for each.
+
+### 2. Vacuous assertions are not assertions
+
+`destroyedCount === 0` with empty `liveBoundaries` is vacuously satisfied — it doesn't actually test anything because nothing was seeded. Reviewer A flagged this in W16 round 2.
+
+**Rule:** assertions on data produced by the runner must be driven by the fixture that seeds the data. If a fixture doesn't seed the data the assertion reads, the assertion is vacuous. Either seed the data, or remove the assertion.
+
+### 3. `total` semantics in aggregates — sum vs span
+
+W16 round 3 brief said "`total` should be the wall-clock span from start of iter 0 to end of iter 9". The implementation used `wallClocks.reduce(sum)`. For sequential execution these are numerically identical; the exercise only checks shape properties (`mean < total`, `total > 10*min`).
+
+**Rule:** when the brief is ambiguous between sum-of-measurements and wall-clock-span, pick one and document it in the function. The orchestrator's brief should specify which it wants; if it doesn't, ask, or document the choice.
+
+### 4. Cosmetic items the reviewer can catch — and the coder should not ship
+
+W16 round 3 follow-up:
+- `e2e/runStub.ts:449-451` — continuation comment was double-prefixed with `// ` on three lines.
+- `e2e/runStub.exercise.ts` — file did not end with newline.
+
+Both are 30-second fixes that the coder should catch before commit. Reviewer A caught them, costing one extra round-trip.
+
+**Rule:** before opening the PR, the coder should `grep -n '^[[:space:]]*//.*//'` for double-prefixed comments, and `tail -c 1 file | od -c` for trailing newlines. These are mechanical checks the coder runs in 5 seconds; the reviewer runs them after a 5-minute PI round-trip.
+
+### 5. Grant token truncation in operator-facing reports
+
+W16 round 4 hand inspection report. Grant tokens are sensitive (they grant a boundary). The brief required only the first 12 chars (`sk-img2-XXXX`) appear in the operator-facing report.
+
+**Rule:** any operator-facing report (hand inspection, audit log, viewer output) that prints a grant token must truncate to the prefix only. Full tokens must NEVER appear in stdout, files, or reports that a human reads.
+
+### W16 ship pattern
+
+```
+Round 1: e2e harness + fixture + runner + happy path (clause 1)
+Round 2: restart mid-job (Direction A only) (clause 2)
+Round 3: 10 fixture variants + batch runner + wall clock (clause 3)
+Round 4: hand inspection report + verdict records (clause 4)
+```
+
+Each round = branch + commits + 2 reviewers (M3 + M2.7-hs) + PR-into-staging + closeout. Total e2e checks at W16 close: 42/42 (19 happy + 9 restart + 8 batch + 6 hand inspection).
+
+W16 closed MVP. PR #97 (staging → main) is the consolidated session PR; user reviews at weekend.
