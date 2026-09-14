@@ -401,6 +401,85 @@ This applies to the orchestrator's own commits AND to every coder/reviewer/debat
 
 When the orchestrator detects that a spawned agent's commit has the wrong author or has added an AI footer, the orchestrator's closeout checklist (`d84570e`) requires re-authoring or amending before continuing. The cost is small; the alternative is a git log that reads as AI-generated, which defeats the project's intent.
 
+## The model roster, and what each round may spend
+
+Two providers are configured, and they bill differently. That difference decides allocation more
+than any quality claim does.
+
+**minimax** runs on a plan. Spawning one more reviewer costs wall-clock, not money.
+
+**atlascloud** is metered credit. Every run is billed, so a reviewer spawned there has to earn its
+place. Prices below are per million tokens, read from the provider's own `/v1/models` response
+rather than from a vendor page:
+
+| model | in | out | ctx | tools |
+|---|---|---|---|---|
+| `atlascloud/deepseek-ai/deepseek-v4-flash` | $0.14 | $0.28 | 1M | yes |
+| `atlascloud/zai-org/glm-5` | $0.95 | $3.15 | 203K | yes |
+| `atlascloud/deepseek-ai/deepseek-v4-pro` | $1.68 | $3.38 | 1M | yes |
+| `anthropic/claude-sonnet-4.6` | $3.00 | $15.00 | 200K | **no** |
+| `openai/gpt-5.4` | $2.50 | $15.00 | 400K | **no** |
+
+The last two columns matter more than the price. A reviewer must read files, so a model the
+catalogue lists without tool support cannot hold the role whatever it costs. Check
+`supported_features` before proposing a model for a reviewing seat, not after.
+
+A review pass on a typical round is roughly 100K in / 10K out. That is about 1.7 cents on
+`deepseek-v4-flash` and about 45 cents on `claude-sonnet-4.6` — a factor of twenty-five for the
+same seat.
+
+### Allocation
+
+- **Coder, and the first two reviewers: minimax.** The bulk of the work goes where marginal runs
+  are free.
+- **The differentiating seat: atlascloud, cheapest model that has tools.** One reviewer from a
+  second provider is worth more than a third from the first, because three minimax models are not
+  independent samples — same provider, likely shared training data and priors. Their agreement is
+  weaker evidence than it looks.
+- **The expensive models: only when a round has already failed twice on the same question.** Not as
+  a default, and never for a cosmetic round.
+
+### `models.json` gotcha
+
+pi reports custom-provider models as `128K / 16.4K` regardless of what the provider advertises —
+those are pi's defaults, not the API's answer. `deepseek-v4-flash` really has a 1M window. If a
+brief plus a diff would exceed 128K, set the real limits explicitly in `~/.pi/agent/models.json`
+or the run will be truncated without saying so.
+
+Credentials belong in a mode-600 file read through `"apiKey": "!cat /path"`, never inline in
+`models.json`.
+
+## Benchmark models inside the project, not from reviews
+
+Published comparisons are run on someone else's task. The question here is narrower — which model
+reviews *this* codebase well — and it is answerable directly, because every round already produces
+the ground truth.
+
+Run the candidates on the **same brief, the same commit, separate sessions, unique output paths**,
+then score each against the orchestrator's own verification:
+
+| metric | how it is obtained |
+|---|---|
+| wall-clock | `pilot.py` records start and finish |
+| cost | tokens × the price table above; zero for minimax |
+| **confirmed** | the orchestrator re-measures the finding and it holds |
+| **refuted** | the orchestrator re-measures and it does not — this is noise, and it subtracts |
+| **unique** | no other model in the round raised it |
+
+Quality is `confirmed + unique`, penalised by `refuted`. Counting findings alone rewards whichever
+model talks most.
+
+Two rules that keep the result honest:
+
+- **One round is one sample.** Model output varies run to run on the same input — the same subject
+  finished `complete` after eight review passes once and `partial` after one pass another time.
+  Rank nothing from a single round; accumulate across the rounds already being run for other
+  reasons, so the benchmark costs almost nothing extra.
+- **The orchestrator is the ground truth, not the majority.** Where models disagree, the
+  disagreement is settled by measuring the code. A finding three models share is not thereby
+  correct, and one model alone is not thereby wrong. Round 09-r1 is the case: M3 raised four
+  citation errors that M2.7-highspeed missed entirely, and all four held when measured.
+
 ## Dual-model parallel review (M3 + M2.7-highspeed)
 
 The orchestrator's standard mode is to spawn **two reviewers on the same brief with different models**: one on `minimax/MiniMax-M3`, one on `minimax/MiniMax-M2.7-highspeed`. The two produce independent samples of the same lens; the orchestrator compares the outputs, settles disagreements, and decides.
