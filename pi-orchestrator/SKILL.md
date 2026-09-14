@@ -849,3 +849,37 @@ worktree.
 Before launching any coder: create the worktree, install dependencies, run the test suite once,
 and only then hand over the brief. And require in the brief that the coder run what it changed
 and paste the output — a coder that cannot run the test cannot tell you its fix is untested.
+
+## A check that reads build output must own its precondition
+
+Playground issue #9, criterion 3. A test suite asserted that the shipped bundle contains no
+excluded code. The suite's `test` script does not build. So the assertion read whatever `dist/`
+happened to be on disk, and the guard covered `dist/` being *absent* but not *stale*.
+
+Measured — the same source edit, with only a rebuild between the two runs:
+
+```
+WORLDGEN_ENABLED flipped to true, no rebuild:   ✔ the shipped browser bundle contains no WorldGen…
+same edit, after npm run build:                 ✖ marker "worldgen-v1.6" … present in dist/
+```
+
+The green is a false all-clear, and it hides more than the case that produced it: a regression
+that lives only in the build — a bundler config change that stops tree-shaking, a new dynamic
+import, a plugin that inlines a value — is invisible to every source-level test in the suite,
+and the artifact test is the only one that would have seen it.
+
+Whenever a check reads generated output, ask what refreshes it and when. The check must compare
+input and output freshness and regenerate, or refuse to run. "The developer will remember to
+build first" is not a precondition, it is a hope.
+
+## A test that goes red for a compile error has demonstrated nothing
+
+Probing the same round, a gate was deleted to show the test catching its removal. The suite
+went red — with `TS6133: 'WORLDGEN_ENABLED' is declared but its value is never read`. Deleting
+the gate had removed the import's only use, so the failure was the compiler's, and the test
+never ran.
+
+The fix to the probe, not to the code: leave the gate in place and make it unreachable, so the
+build stays valid and the assertion is what fails. Whenever you break something deliberately,
+read *which* thing failed before counting it as a demonstration — the orchestrator made this
+exact mistake one probe before catching the coder's version of it.
