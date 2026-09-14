@@ -414,7 +414,7 @@ rather than from a vendor page:
 
 | model | in | out | ctx | tools |
 |---|---|---|---|---|
-| `atlascloud/deepseek-ai/deepseek-v4-flash` | $0.14 | $0.28 | 1M | yes |
+| `atlascloud/deepseek-ai/deepseek-v4-flash-0731` | $0.44 | $1.32 | 1M | yes |
 | `atlascloud/zai-org/glm-5` | $0.95 | $3.15 | 203K | yes |
 | `atlascloud/deepseek-ai/deepseek-v4-pro` | $1.68 | $3.38 | 1M | yes |
 | `anthropic/claude-sonnet-4.6` | $3.00 | $15.00 | 200K | **no** |
@@ -438,6 +438,24 @@ same seat.
   weaker evidence than it looks.
 - **The expensive models: only when a round has already failed twice on the same question.** Not as
   a default, and never for a cosmetic round.
+
+### An unversioned alias is not the newest build
+
+`deepseek-v4-flash` costs $0.14/$0.28; `deepseek-v4-flash-0731` costs $0.44/$1.32 — three times
+more for what looks like an older, dated snapshot. The price inversion is the tell, and it was
+ignored for two rounds.
+
+The unversioned id is the **April preview**. `-0731` is the official release that superseded it,
+with, in the vendor's words, substantially enhanced agentic capabilities — which is the whole of
+what a coder or reviewer seat is buying. Two rounds of benchmarking ran on the preview.
+
+Asking the model does not settle it: `-0731` reports itself as "DeepSeek-V3, cutoff July 2024",
+which is wrong. Self-identification is not evidence of version.
+
+**Check the vendor's release notes before pinning an id, and treat a dated build that costs more
+than its unversioned sibling as the newer one until shown otherwise.** Where a gateway lags the
+vendor — AtlasCloud carries no 4.1 build while DeepSeek's own API has retired V4 Flash entirely —
+pin the newest the gateway actually serves, and record which that is.
 
 ### `models.json` gotcha
 
