@@ -813,3 +813,39 @@ Round 4: hand inspection report + verdict records (clause 4)
 Each round = branch + commits + 2 reviewers (M3 + M2.7-hs) + PR-into-staging + closeout. Total e2e checks at W16 close: 42/42 (19 happy + 9 restart + 8 batch + 6 hand inspection).
 
 W16 closed MVP. PR #97 (staging → main) is the consolidated session PR; user reviews at weekend.
+
+## A red test is not evidence that a gate holds something shut
+
+Playground round 4 (issue #9). A script classified eight gates as "demonstrated by deletion"
+because deleting each one turned the test red. Two of them were mislabelled, and the
+measurement that settled it was one line:
+
+```
+✖ a missing access code stops the procedural proxy before any runner fetch
+  AssertionError: gate 709: no PROCEDURAL_ORIGIN: body should identify which gate fired
+```
+
+The **status** assertion passed — still 503, still zero outbound fetches. Only the **body**
+assertion failed. Deleting the gate opened no hole; a later gate caught the request and the
+refusal text changed. "Demonstrated by deletion" was claiming protection the deletion had not
+shown.
+
+The rule: a gate is demonstrated by its removal only when removal changes the **outcome** — a
+different status, or a request that reaches whatever the gate guarded. If only a string moves,
+label it a body rename and name the gate that actually catches the request. Ask of every
+demonstration: *which assertion failed, and what did the other assertions still prove?*
+
+Do not accept the author's stated reason for a classification. Both coders in that round gave
+plausible reasons; only one was right, and the difference was visible only by deleting the gate
+and reading the failure.
+
+## Prepare the worktree before you launch a coder into it
+
+The dsh coder in round 4 spent its whole run in a worktree with no `node_modules`. Every test
+invocation died on `tsc: not found`, its script dutifully reported `0 of 8` gates, and the coder
+never noticed it had not once executed the thing it was changing. The orchestrator created that
+worktree.
+
+Before launching any coder: create the worktree, install dependencies, run the test suite once,
+and only then hand over the brief. And require in the brief that the coder run what it changed
+and paste the output — a coder that cannot run the test cannot tell you its fix is untested.
