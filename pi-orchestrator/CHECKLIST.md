@@ -10,6 +10,9 @@ Every line here exists because it was got wrong at least once. Count in brackets
       background task was killed mid-refactor with exit 144. Run the agent detached so it
       survives, and start a separate harness-tracked loop that polls its log and its worktree, so
       the user can see it and gets told when it ends.
+- [ ] **The completion sentinel must be one the agent cannot emit** [1]. A monitor grepping
+      for `EXIT=` reported the run finished; the string had come from the agent's own
+      `echo "EXIT=$?"` inside a bash tool call. Use a random marker, and anchor it (`^`).
 - [ ] **Give every run a `--session-id`** [1]. It is what makes an interrupted run resumable
       with its context intact instead of restarting from nothing.
 - [ ] **Worktree deps: `ln -s <main>/node_modules`**, not `npm ci` [measured: 25s vs minutes].
