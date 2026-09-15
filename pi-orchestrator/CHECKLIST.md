@@ -50,6 +50,12 @@ Every line here exists because it was got wrong at least once. Count in brackets
       Co-Authored-By trailer", and a clean commit was amended to fix a violation that was never
       there. A check for a thing must not match text about the thing.
 - [ ] **Read output with the right key** [2]: `logs` not `log`.
+- [ ] **`$?` after a pipe is the last command's status, not the one you care about** [3].
+      `cmd | tail -3; echo $?` reports `tail`. Redirect to a file and read `$?` on its own line.
+      This has produced a false "exit=0" on a run that exited 124, and twice more since.
+- [ ] **Grep for the thing, not for text about the thing** [2]. An unanchored search matched a
+      commit body saying "no Co-Authored-By trailer", and a comment explaining why
+      `single-page-application` is *not* set. Anchor, or read the match before believing it.
 - [ ] **A tool that returns empty is not a measurement** [1]: `bc` was absent, arithmetic
       returned empty, and the report said "no CPU — probably hung" for two healthy runs.
 
