@@ -23,6 +23,16 @@ Every line here exists because it was got wrong at least once. Count in brackets
       file-mutating script, left the file corrupt for 65 minutes.
 - [ ] Write down session id + worktree + PID where I can find them again.
 
+## Choosing the model for a unit
+
+- [ ] **DeepSeek v4-flash for wide mechanical sweeps; MiniMax-M3 when the task is an argument**
+      [1]. Three samples agree. It renamed 49 display strings across 12 files in one round while
+      leaving 136 internal identifiers untouched. It missed the one finding of its round that
+      required deleting a gate and reading which assertion failed, and on an enumerate-and-prove-
+      completeness task it ended with `stopReason: "length"` — 16384 output tokens spent entirely
+      on reasoning, producing no commit at all. Check `stopReason` before reading a quiet run as
+      a failure of the work.
+
 ## Before believing any result — mine or an agent's
 
 - [ ] **Reproduce at least one claim myself** [1]. "8 of 8 gates demonstrated" was accepted and
