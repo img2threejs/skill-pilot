@@ -61,6 +61,11 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **Grep for the thing, not for text about the thing** [2]. An unanchored search matched a
       commit body saying "no Co-Authored-By trailer", and a comment explaining why
       `single-page-application` is *not* set. Anchor, or read the match before believing it.
+- [ ] **Never cast a probe's arguments to silence the compiler** [1]. An `as never` on a config
+      object hid that `repo` is `{owner, repo}` and not a string; the call reached GitHub as
+      `repos/undefined/undefined/...`, returned 404, and the publisher's own "the repo does not
+      exist" message made it look like a product defect. The type system was the check, and the
+      cast was me turning it off.
 - [ ] **A tool that returns empty is not a measurement** [1]: `bc` was absent, arithmetic
       returned empty, and the report said "no CPU — probably hung" for two healthy runs.
 
