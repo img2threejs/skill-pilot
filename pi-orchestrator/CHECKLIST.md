@@ -4,9 +4,14 @@ Every line here exists because it was got wrong at least once. Count in brackets
 
 ## Before launching an agent
 
-- [ ] **Harness background, never `nohup … &`** [1]. A detached process is invisible to the
-      user: no chip, no notification, and no way to stop it except by asking me. This is the
-      blind-instrument failure applied to my own tools.
+- [ ] **`nohup` for the agent, harness background for a monitor that watches it** [2]. Neither
+      alone is right: a bare `nohup … &` is invisible to the user — no chip, no notification, no
+      way to stop it except by asking me — and a long agent run placed directly in a harness
+      background task was killed mid-refactor with exit 144. Run the agent detached so it
+      survives, and start a separate harness-tracked loop that polls its log and its worktree, so
+      the user can see it and gets told when it ends.
+- [ ] **Give every run a `--session-id`** [1]. It is what makes an interrupted run resumable
+      with its context intact instead of restarting from nothing.
 - [ ] **Worktree deps: `ln -s <main>/node_modules`**, not `npm ci` [measured: 25s vs minutes].
 - [ ] **Run the suite once before handing over** [1]. A coder spent an entire run in a worktree
       where `npm test` could not start and never noticed.
