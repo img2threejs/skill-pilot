@@ -16,6 +16,11 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **Give every run a `--session-id`** [1]. It is what makes an interrupted run resumable
       with its context intact instead of restarting from nothing.
 - [ ] **Worktree deps: `ln -s <main>/node_modules`**, not `npm ci` [measured: 25s vs minutes].
+      The cost of that speedup: every worktree shares one `node_modules`, so a branch that adds a
+      dependency leaves the others stale. **Run `npm ci` in the main checkout after merging any
+      branch that touched `package.json`** [1] — staging went red with `Cannot find module 'pg'`
+      on a branch whose own suite was green, because the lockfile was right and the shared
+      directory was not.
 - [ ] **Run the suite once before handing over** [1]. A coder spent an entire run in a worktree
       where `npm test` could not start and never noticed.
 - [ ] **Brief points at `AGENTS.md`; do not restate the standard** [measured: 79 → 48 lines].
