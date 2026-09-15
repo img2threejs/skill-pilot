@@ -45,6 +45,10 @@ Every line here exists because it was got wrong at least once. Count in brackets
       503 and zero fetches proves nothing about that gate.
 - [ ] **Commits:** author `kokorolx`, no AI footer, clean tree, nothing outside scope, no `dist/`,
       no `.env` [2 — one `.env` was staged, two commits needed rewriting].
+- [ ] **Anchor the footer check at line start**: `grep -cE "^(Co-Authored-By:|🤖 Generated with)"`
+      [1]. An unanchored `grep -i "co-authored"` matched a commit body that *said* "no
+      Co-Authored-By trailer", and a clean commit was amended to fix a violation that was never
+      there. A check for a thing must not match text about the thing.
 - [ ] **Read output with the right key** [2]: `logs` not `log`.
 - [ ] **A tool that returns empty is not a measurement** [1]: `bc` was absent, arithmetic
       returned empty, and the report said "no CPU — probably hung" for two healthy runs.
