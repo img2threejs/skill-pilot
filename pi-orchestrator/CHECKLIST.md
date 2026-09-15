@@ -25,13 +25,15 @@ Every line here exists because it was got wrong at least once. Count in brackets
 
 ## Choosing the model for a unit
 
-- [ ] **DeepSeek v4-flash for wide mechanical sweeps; MiniMax-M3 when the task is an argument**
-      [1]. Three samples agree. It renamed 49 display strings across 12 files in one round while
-      leaving 136 internal identifiers untouched. It missed the one finding of its round that
-      required deleting a gate and reading which assertion failed, and on an enumerate-and-prove-
-      completeness task it ended with `stopReason: "length"` — 16384 output tokens spent entirely
-      on reasoning, producing no commit at all. Check `stopReason` before reading a quiet run as
-      a failure of the work.
+- [ ] **Declare `contextWindow` and `maxTokens` for every model you add to `~/.pi/agent/models.json`**
+      [1]. pi carries a catalogue of limits for models it knows; one added through a custom
+      provider falls back to **16384 output tokens**. A DeepSeek run ended with
+      `stopReason: "length"` and no commit, having spent that whole budget on reasoning — the
+      model's real ceiling is 393216. The verdict written here first ("DeepSeek cannot sustain a
+      long argument") was a conclusion about my configuration wearing a model's name. `max_tokens`
+      is a ceiling, not a spend: you pay for tokens generated, so declare the real one.
+- [ ] **`stopReason` before blame** [1]. `length` means truncated, not incapable. Read it before
+      concluding anything about the model.
 
 ## Before believing any result — mine or an agent's
 
