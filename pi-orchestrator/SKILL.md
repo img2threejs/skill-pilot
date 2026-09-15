@@ -5,6 +5,11 @@ description: Coordinate multi-round review of a PR — spawn parallel subagents,
 
 # Orchestrate a PR review
 
+**Read `CHECKLIST.md` in this directory before every launch, every verdict and every
+landing.** It is short on purpose. Every line in it is something this project got wrong at
+least once, and most of them twice — because the lesson was written as prose here instead of as
+a check there.
+
 Read `pi-pilot` first. That skill drives PI runs; this one decides what to drive and what to do with what comes back.
 
 ## What you are here
