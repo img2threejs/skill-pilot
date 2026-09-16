@@ -68,9 +68,10 @@ filter's. A guard beats a reminder.
       Co-Authored-By trailer", and a clean commit was amended to fix a violation that was never
       there. A check for a thing must not match text about the thing.
 - [ ] **Read output with the right key** [2]: `logs` not `log`.
-- [ ] **`$?` after a pipe is the last command's status, not the one you care about** [3].
-      `cmd | tail -3; echo $?` reports `tail`. Redirect to a file and read `$?` on its own line.
-      This has produced a false "exit=0" on a run that exited 124, and twice more since.
+- [ ] **Never read `$?` after a pipe** [3]. Call `probe.run(cmd)` — it returns the command's own
+      status and *refuses* a command that pipes into a filter. `cmd | tail -3; echo $?` reports
+      `tail`, which produced a false `exit=0` for a run that had exited 124, twice more after
+      that, and once inside the very tool written to stop it.
 - [ ] **Open a grep hit before dismissing it as noise** [1]. `AGENTS.md` appearing inside a
       harness's own source was read as the harness documenting itself; it was the loader, and the
       verdict written from that dismissal was wrong in the file for a day.
