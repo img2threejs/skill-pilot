@@ -22,6 +22,11 @@ sequential, all of it one person.
 Three changes, in order of leverage. The fourth thing people reach for — dropping the PR — is not
 one of them: a PR is cheap and it is how the owner tracks what is happening.
 
+**Watch every dispatch.** `orchestrator/watch.py --loop 120 <worktree> …` polls each agent and
+classifies it WORKING / STALLED / DONE / FAILED. Dispatching without one is how an agent that
+died at minute three gets discovered at minute ninety — the three failure shapes (dead, wedged,
+finished) all look like silence, and none of them announces itself.
+
 **Run the reviewer in parallel with the next coder.** This skill ships `reviewer`, `adjudicator`
 and `prescription-verifier` and they go unused when the orchestrator verifies everything
 personally. Coder B starts unit N+1 while a reviewer checks unit N; the orchestrator adjudicates

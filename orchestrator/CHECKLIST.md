@@ -53,6 +53,24 @@ filter's. A guard beats a reminder.
 - [ ] **`stopReason` before blame** [1]. `length` means truncated, not incapable. Read it before
       concluding anything about the model.
 
+## Never dispatch without a watch
+
+- [ ] **Start `watch.py --loop` in the same breath as the dispatch** [1]. Fire-and-forget cost this
+      project hours: an agent that died without committing, one wedged on a command that never
+      returned, and one that finished an hour before anyone looked all present the same way — as
+      silence. The orchestrator then learns the state only when the owner asks, which is the worst
+      possible moment.
+
+      ```sh
+      python3 orchestrator/watch.py --loop 120 <worktree> [<worktree> …]
+      ```
+
+      It reports WORKING, STALLED, DONE or FAILED per worktree and names the ones needing
+      attention. **FAILED is the one that matters**: no agent and nothing committed, or work left
+      stranded uncommitted — the state that looks exactly like success from outside.
+- [ ] **A quiet agent is not a finished one, and a finished one is not a successful one.** The
+      watch separates those three; a glance at a log separates none of them.
+
 ## Before believing any result — mine or an agent's
 
 - [ ] **Reproduce at least one claim myself** [1]. "8 of 8 gates demonstrated" was accepted and

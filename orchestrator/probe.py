@@ -84,33 +84,45 @@ def newest_mtime(paths: list[str]) -> float | None:
 
 
 def agent_pid(worktree: str) -> int | None:
-    """The agent process working in this worktree, not the shell that launched it.
+    """The agent process working in this worktree.
 
-    Passing a launcher's pid to `stalled()` reported a working agent as dead: the `bash -c`
-    wrapper had exited while `pi` went on underneath it. Ask by worktree and the question cannot
-    be posed wrongly.
+    Ask the kernel where a process actually is — `/proc/<pid>/cwd` — rather than guessing from
+    its arguments. Three earlier versions of this got it wrong in three different ways: matching
+    `comm == "pi"` returned whatever stray run was oldest on the host; matching the worktree in
+    argv missed every agent launched with `cd <worktree> && pi …`, because the path is the cwd and
+    never appears in argv; and matching loosely returned the caller's own shell. The cwd is the
+    one thing that cannot be confused with a mention of the path.
     """
-    out = subprocess.run(
-        ["ps", "-eo", "pid=,ppid=,comm=,args="], capture_output=True, text=True).stdout
-    rows = []
+    root = Path(worktree).resolve()
+    out = subprocess.run(["ps", "-eo", "pid=,comm=,args="], capture_output=True, text=True).stdout
+    candidates = []
     for line in out.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) < 4:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
             continue
-        pid, ppid, comm, args = int(parts[0]), int(parts[1]), parts[2], parts[3]
-        rows.append((pid, ppid, comm, args))
-    # `pi` renames its own process to `pi` and drops its arguments, so it cannot be attributed
-    # to a worktree directly — find the launcher that names the worktree, then its `pi` child.
-    # Matching on `comm == "pi"` alone returns whatever stray run is oldest on the host, which is
-    # how this helper first reported a four-day-old process as the agent for a fresh worktree.
-    launchers = [pid for pid, _, _, args in rows
-                 if worktree in args and ("pi -p" in args or "pilot.py" in args)]
-    for pid, ppid, comm, args in rows:
-        if ppid in launchers and (comm == "pi" or "pilot.py" in args):
+        pid, comm, args = int(parts[0]), parts[1], parts[2]
+        if comm != "pi" and "pilot.py" not in args:
+            continue
+        # Two harnesses name their target two ways. `pilot.py` takes `--cwd <worktree>` and runs
+        # from wherever it was launched; `pi` is launched by `cd <worktree> && pi …`, so the path
+        # is its cwd and never appears in argv. Check both, or half the agents look absent.
+        if f"--cwd {root}" in args or f"--cwd {worktree}" in args:
+            candidates.append((pid, comm))
+            continue
+        # A process that names its target explicitly is not working on any other worktree, even
+        # though it runs from one.
+        if "--cwd " in args:
+            continue
+        try:
+            if Path(f"/proc/{pid}/cwd").resolve() == root:
+                candidates.append((pid, comm))
+        except (OSError, PermissionError):
+            continue
+    # Prefer the agent itself over the shell that launched it.
+    for pid, comm in candidates:
+        if comm == "pi" or comm.startswith("python"):
             return pid
-    for pid in launchers:
-        return pid
-    return None
+    return candidates[0][0] if candidates else None
 
 
 def stalled(worktree: str, log: str | None = None, pid: int | None = None,
