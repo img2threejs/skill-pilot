@@ -33,6 +33,22 @@ LEFTOVER = re.compile(r"(dist-server/server\.mjs|procedural-server\.mjs|tests/ru
                       r"|node_modules/\.bin/vite|--test-coverage|esbuild)")
 
 
+def alive(pid: int) -> bool:
+    """One correct liveness check, so nobody writes another wrong one.
+
+    `ps -eo pid -p <pid>` prints every process on the host: `-e` overrides `-p`. That form has
+    twice answered "everything is alive" to a question about one dead process, once inside a
+    monitor that then reported a finished agent as running for 56 minutes.
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+
+
 def ps_all() -> list[dict]:
     out = subprocess.run(
         ["ps", "-eo", "pid=,ppid=,etimes=,pcpu=,comm=,args="],

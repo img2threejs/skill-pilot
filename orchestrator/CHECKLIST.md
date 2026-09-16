@@ -93,8 +93,12 @@ by-hand version of it nearly took production down, see below.
 - [ ] **Diagnose a quiet agent by file mtime, not by log growth** [1]. The log had not moved, but
       neither had any file it had edited — last write 1h44m earlier — and the CPU total agreed.
       Three signals agreeing is a stall; one is a guess.
-- [ ] **`ps -e` overrides `-p`** [1]. `ps -eo pid --no-headers -p <list>` prints every process on
-      the host, so a check for "did these four die" answered "182 alive". Drop the `-e`.
+- [ ] **`ps -e` overrides `-p`** [**2**]. `ps -eo pid --no-headers -p <pid>` prints every process
+      on the host — a check for "did these four die" answered "182 alive", and a monitor built the
+      same way reported a dead agent as running for 56 minutes. Writing this line down did not
+      stop the second occurrence: the next tool written after it used the broken form again.
+      **The only reliable form is `ps -p <pid> -o pid=` with no `-e`.** Better still, do not write
+      a liveness check by hand — `sweep.py` has one, use it.
 
 ## Before calling something stuck
 
