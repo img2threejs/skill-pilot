@@ -64,6 +64,62 @@ def run(command: str, cwd: str | None = None, timeout: int = 1800,
     return done.returncode, done.stdout, done.stderr
 
 
+def end_matching(pattern: str, dry_run: bool = False) -> list[int]:
+    """Kill processes whose command line matches `pattern`, never including this one.
+
+    `pkill -f <pattern>` matches the command line of the shell that is running it, because
+    that command line contains the pattern as an argument. It kills itself, and anything it
+    started in the same command dies with it. That has happened four times in this project;
+    twice it took down the shell mid-task, and once it killed the watcher started two lines
+    later in the same invocation, leaving two agents running unobserved.
+
+    This walks the process table, skips self and every ancestor of self, and returns the pids
+    it ended so the caller can report a number instead of assuming one. SIGTERM, then SIGKILL
+    for anything still alive after three seconds — a wedged PI does not answer SIGTERM.
+    """
+    me = os.getpid()
+    ancestors, pid = {me}, me
+    while pid > 1:
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                pid = int(fh.read().rsplit(") ", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+        ancestors.add(pid)
+
+    rx = re.compile(pattern)
+    targets = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        candidate = int(entry)
+        if candidate in ancestors:
+            continue
+        try:
+            with open(f"/proc/{candidate}/cmdline", "rb") as fh:
+                cmdline = fh.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        if cmdline.strip() and rx.search(cmdline):
+            targets.append(candidate)
+
+    if dry_run:
+        return targets
+    for target in targets:
+        try:
+            os.kill(target, 15)
+        except ProcessLookupError:
+            pass
+    time.sleep(3)
+    for target in targets:
+        if alive(target):
+            try:
+                os.kill(target, 9)
+            except ProcessLookupError:
+                pass
+    return targets
+
+
 FOOTER = re.compile(r"^(Co-Authored-By:|🤖 Generated with)", re.M)
 
 

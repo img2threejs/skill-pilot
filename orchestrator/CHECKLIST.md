@@ -145,8 +145,12 @@ by-hand version of it nearly took production down, see below.
       pid)`: it wants the process alive, the log flat across a real window, **and** nothing it
       edits touched for far longer. A quiet log alone was read as death three times; pi writes its
       transcript at the end.
-- [ ] **Process lookup, never `pkill -f <pattern>`** [2] — the pattern matches my own shell's
-      command line and kills it.
+- [ ] **`probe.end_matching(pattern)`, never `pkill -f <pattern>`** [4] — the pattern matches
+      my own shell's command line and kills it. Written down after two occurrences and broken
+      twice more since, the last time killing the watcher started two lines later in the same
+      invocation and leaving two agents running unobserved. The rule is now the function:
+      it skips self and every ancestor, and returns the pids it ended so the count is
+      measured rather than assumed.
 
 ## Before landing
 
