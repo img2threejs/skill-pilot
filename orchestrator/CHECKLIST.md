@@ -55,6 +55,13 @@ filter's. A guard beats a reminder.
 
 ## Never dispatch without a watch
 
+- [ ] **`sweep.py --disk` before every dispatch** [**2**]. The disk filled twice in one day. The
+      second time it took **every container down — the deployment included** — and killed a
+      mid-round agent with `ENOSPC: no space left on device, write`, which reads as an agent
+      failure and is not one. Cause: `docker run postgres:18` without `-v` creates an anonymous
+      volume and nothing removes it. 435 were reclaimed in the morning; by the afternoon there
+      were 488 holding 23 GB. Reclaim with `sweep.py --disk --kill`, and **use `--rm` on every
+      throwaway container** so the next one does not accumulate.
 - [ ] **Start `watch.py --loop` in the same breath as the dispatch** [1]. Fire-and-forget cost this
       project hours: an agent that died without committing, one wedged on a command that never
       returned, and one that finished an hour before anyone looked all present the same way — as

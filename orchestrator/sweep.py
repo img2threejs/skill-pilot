@@ -26,6 +26,7 @@ import subprocess
 import sys
 
 KILL = "--kill" in sys.argv
+DISK = "--disk" in sys.argv
 WORKSPACES = "/home/team/workspaces"
 AGENT_PATTERNS = (re.compile(r"\bpi -p\b"), re.compile(r"pilot\.py\b"))
 # What an agent run leaves behind: servers it started, test runners, bundlers.
@@ -62,6 +63,37 @@ def ps_all() -> list[dict]:
         rows.append({"pid": int(pid), "ppid": int(ppid), "etimes": int(etimes),
                      "cpu": float(pcpu), "comm": comm, "args": args})
     return rows
+
+
+def disk_report(reclaim: bool = False) -> None:
+    """Anonymous Docker volumes, and how close the host is to falling over.
+
+    `docker run postgres:18` without `-v` creates an anonymous volume and nothing removes it.
+    Four hundred and thirty-five of them were deleted one morning; by the afternoon there were
+    488 holding 23 GB, the disk hit 100%, Docker killed every container — the deployment included
+    — and an agent died mid-round with ENOSPC. The disk filling is not a tidiness problem; it is
+    an outage that arrives disguised as an unrelated failure.
+    """
+    free = subprocess.run(["df", "--output=pcent,avail", "-h", "/"],
+                          capture_output=True, text=True).stdout.splitlines()
+    used = free[1].split()[0] if len(free) > 1 else "?"
+    avail = free[1].split()[1] if len(free) > 1 else "?"
+    anon = subprocess.run(
+        ["bash", "-c", "docker volume ls -q | grep -cE '^[0-9a-f]{64}$' || true"],
+        capture_output=True, text=True).stdout.strip() or "0"
+    in_use = subprocess.run(
+        ["bash", "-c", "docker ps -q | xargs -I{} docker inspect {} "
+         "--format '{{range .Mounts}}{{if eq .Type \"volume\"}}{{.Name}} {{end}}{{end}}' "
+         "2>/dev/null | tr ' ' '\\n' | grep -cE '^[0-9a-f]{64}$' || true"],
+        capture_output=True, text=True).stdout.strip() or "0"
+    print(f"disk {used} used, {avail} free | {anon} anonymous volume(s), {in_use} in use")
+    if int(anon) and not int(in_use) and reclaim:
+        subprocess.run(["bash", "-c",
+                        "docker volume ls -q | grep -E '^[0-9a-f]{64}$' | xargs -r -n50 docker volume rm"],
+                       capture_output=True)
+        print("  reclaimed — none of them was attached to a running container")
+    elif int(anon) and not reclaim:
+        print("  pass --disk with --kill to reclaim them")
 
 
 rows = ps_all()
@@ -104,6 +136,8 @@ for row in candidates:
     kind, why = verdict(row)
     (orphans if kind == "orphan" else kept).append((row, why))
 
+if DISK:
+    disk_report(KILL)
 print(f"live agents: {sorted(live_agents) or 'none'}")
 for row, why in kept:
     print(f"  keep    pid={row['pid']:<8} {why:<28} {row['args'][:60]}")
