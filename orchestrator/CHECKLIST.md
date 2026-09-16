@@ -72,17 +72,29 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **A tool that returns empty is not a measurement** [1]: `bc` was absent, arithmetic
       returned empty, and the report said "no CPU — probably hung" for two healthy runs.
 
-## Kill what a run leaves behind
+## Kill what a run leaves behind — run `sweep.py` before and after every round
 
-- [ ] **A test that binds a port leaves a process that blocks every later run** [1]. A server
-      spawned by `npm test` in one worktree survived 15 hours holding `127.0.0.1:24036` — the exact
-      port the suite's own `24000 + pid % 500` produced for the next agent. That agent's test run
-      waited on the bind for **1h44m** while burning 10 seconds of CPU, and looked exactly like a
-      hung model. It was mine. Sweep for orphans before blaming an agent, and after every round
-      that ran the suite.
+`orchestrator/sweep.py` reports leftovers; `--kill` ends them. Do not do this by hand: the
+by-hand version of it nearly took production down, see below.
+
+- [ ] **`python3 sweep.py` before launching an agent, and again after the round closes** [1].
+      A server spawned by `npm test` in one worktree survived **15 hours** holding
+      `127.0.0.1:24036` — the exact port the suite's own `24000 + pid % 500` produced for the next
+      agent. That agent's test run waited on the bind for **1h44m** while burning 10 seconds of
+      CPU, and looked exactly like a hung model. It was mine. Nothing reported it; the resource
+      was gone and no instrument said so.
+- [ ] **A parent of `containerd-shim` is a container's PID 1, not an orphan** [1]. Sweeping by
+      hand, `node dist-server/server.mjs` and `node tools/procedural-server.mjs` were read as
+      leftovers and sent SIGKILL. They were the live playground and procedural containers. Only
+      the kernel's permission check across the PID namespace stopped it — that is luck, not a
+      control. `sweep.py` walks the parent chain and keeps anything under a container.
+- [ ] **When in doubt, keep.** Over-keeping wastes memory; over-killing takes down a deployment or
+      a colleague's run. The sweep errs towards keep by design and says why for each decision.
 - [ ] **Diagnose a quiet agent by file mtime, not by log growth** [1]. The log had not moved, but
-      neither had any file it had edited — last write 1h44m earlier — and the CPU total said the
-      same. Three signals agreeing is a stall; one is a guess.
+      neither had any file it had edited — last write 1h44m earlier — and the CPU total agreed.
+      Three signals agreeing is a stall; one is a guess.
+- [ ] **`ps -e` overrides `-p`** [1]. `ps -eo pid --no-headers -p <list>` prints every process on
+      the host, so a check for "did these four die" answered "182 alive". Drop the `-e`.
 
 ## Before calling something stuck
 
