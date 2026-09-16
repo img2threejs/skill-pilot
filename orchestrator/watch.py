@@ -70,6 +70,12 @@ def look(worktree: str, previous: dict) -> dict:
 
 
 def main() -> int:
+    # A watcher redirected to a file is the normal case, and Python block-buffers stdout
+    # there: one run reported nothing at all for twenty minutes while the agent it watched
+    # was working, because 4KB of rows had not yet filled a buffer. A poller that cannot be
+    # read while it polls is the failure it exists to prevent.
+    sys.stdout.reconfigure(line_buffering=True)
+
     args = sys.argv[1:]
     interval = 0
     if args and args[0] == "--loop":
