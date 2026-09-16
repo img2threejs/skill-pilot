@@ -72,6 +72,18 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **A tool that returns empty is not a measurement** [1]: `bc` was absent, arithmetic
       returned empty, and the report said "no CPU — probably hung" for two healthy runs.
 
+## Kill what a run leaves behind
+
+- [ ] **A test that binds a port leaves a process that blocks every later run** [1]. A server
+      spawned by `npm test` in one worktree survived 15 hours holding `127.0.0.1:24036` — the exact
+      port the suite's own `24000 + pid % 500` produced for the next agent. That agent's test run
+      waited on the bind for **1h44m** while burning 10 seconds of CPU, and looked exactly like a
+      hung model. It was mine. Sweep for orphans before blaming an agent, and after every round
+      that ran the suite.
+- [ ] **Diagnose a quiet agent by file mtime, not by log growth** [1]. The log had not moved, but
+      neither had any file it had edited — last write 1h44m earlier — and the CPU total said the
+      same. Three signals agreeing is a stall; one is a guess.
+
 ## Before calling something stuck
 
 - [ ] **Log growth over ≥60s, not a single sample** [3]. PI writes at the end; "idle 708s" read
