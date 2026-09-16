@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import subprocess
 import sys
 
@@ -293,7 +294,6 @@ for row, _ in orphans:
         os.kill(row["pid"], 15)
     except ProcessLookupError:
         pass
-import time
 time.sleep(3)
 for row, _ in orphans:
     try:
