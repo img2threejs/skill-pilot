@@ -1,11 +1,11 @@
 ---
-name: pi-adjudicator
+name: adjudicator
 description: Turn several parallel reviews of one round into a single decision — merge, or send back with an exact item list. You decide; you do not review.
 ---
 
 # Adjudicate
 
-Read `pi-instruments` first.
+Read `instruments` first.
 
 ## What you are here
 
@@ -120,7 +120,7 @@ prescription needs new files, the amendment goes in the same PR as the prescript
 
 ## The sweeps you owe yourself
 
-If every reviewer shares your model, run the three sweeps from `pi-reviewer` yourself before
+If every reviewer shares your model, run the three sweeps from `reviewer` yourself before
 deciding — persistence (answered in a real database, not by reasoning), state lifetime, laundering —
 and report what they found even if it is nothing.
 
@@ -131,4 +131,4 @@ reason; every disagreement with the measurement that settled it; the three sweep
 and the verdict — merge, or send back with this exact list and this many rounds. Never "looks good
 with minor comments": that is not a decision.
 
-End each blocking item with the `Prevented by:` line described in `pi-reviewer`.
+End each blocking item with the `Prevented by:` line described in `reviewer`.

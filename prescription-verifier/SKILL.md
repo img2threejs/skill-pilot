@@ -1,11 +1,11 @@
 ---
-name: pi-prescription-verifier
+name: prescription-verifier
 description: After the author implements an adjudication's prescriptions, walk the post-fix diff against each prescription. Four fix shapes (configuration, code, comment, verifier) get four sub-actions. You verify the implementation; you do not review the original defect.
 ---
 
 # Verify prescriptions after the author implements them
 
-Read `pi-reviewer` first. That skill reviews a diff against a brief; this one verifies the diff *against an adjudication's prescriptions*.
+Read `reviewer` first. That skill reviews a diff against a brief; this one verifies the diff *against an adjudication's prescriptions*.
 
 ## What you are here
 
@@ -20,7 +20,7 @@ You are not re-reviewing the diff. You are confirming each prescription closed i
 
 ## What to read (in this order)
 
-1. `pi-reviewer` (this skill's conventions).
+1. `reviewer` (this skill's conventions).
 2. The adjudication under verification. The fix-per-item list is your contract.
 3. The author's commits since the adjudication (the post-fix diff).
 4. The unit's `work-split.json` (for the `touches` check).
@@ -157,7 +157,7 @@ Write your findings to a file the orchestrator names (typically `<evidence-dir>/
 
 Before walking prescriptions:
 
-1. `pi-reviewer` (the conventions: three sweeps, every claim against the code, "What I could not check").
+1. `reviewer` (the conventions: three sweeps, every claim against the code, "What I could not check").
 2. The adjudication under verification (the fix-per-item list is your contract).
 3. The unit's `work-split.json` (for the `touches` check).
 4. The post-fix diff (the author's commits since the adjudication).

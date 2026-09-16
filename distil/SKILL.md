@@ -1,5 +1,5 @@
 ---
-name: pi-distil
+name: distil
 description: After a round closes, turn its findings into changes to the other skills — edit, promote, add, or retire. Produces a diff for the orchestrator to judge, never a commit.
 ---
 
@@ -23,7 +23,7 @@ matter get read less as they sink. Expect to retire or merge at least as often a
 
 > **Which skill rule would have prevented this, and did it exist?**
 
-`pi-reviewer` requires each blocking finding to end with a `Prevented by:` line carrying that answer,
+`reviewer` requires each blocking finding to end with a `Prevented by:` line carrying that answer,
 so start from those rather than re-deriving them — but verify each one against the skills as they
 actually are.
 

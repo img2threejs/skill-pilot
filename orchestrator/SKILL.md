@@ -1,5 +1,5 @@
 ---
-name: pi-orchestrator
+name: orchestrator
 description: Coordinate multi-round review of a PR — spawn parallel subagents, score each round's evidence, decide ship or continue, distill lessons into the other skills. You decide; you do not review.
 ---
 
@@ -38,7 +38,7 @@ Round 1 — N parallel reviewers, different lenses, different briefs, kept apart
   │     - each scores itself
   │
   ▼
-Adjudication (delegated to pi-adjudicator subagent or done by you)
+Adjudication (delegated to adjudicator subagent or done by you)
   │     - merges, dedupes, settles disagreements by measuring
   │     - reads each prescription against the code
   │     - files scope / create-path / regression-guard findings
@@ -237,7 +237,7 @@ If the orchestrator finds no issues whose selection passes the rubric, the orche
 score.json
 {
   "round": "<unit-rN>",
-  "scoring_model": "pi-orchestrator-v1",
+  "scoring_model": "orchestrator-v1",
   "rounds": [
     {
       "round": "<name>",
@@ -324,7 +324,7 @@ The lessons from each round are inputs to the next round, not to a future skill 
 5. Edit the skill file directly. Each rule needs the case that produced it (per `pi-pilot`'s README convention).
 6. Commit the skill change with the PR's evidence as the message body.
 
-`pi-distil` exists because skills that are only ever added to become skills that are not read. Doing the distillation immediately after the round that produced the lesson is what keeps the rules in the skills current with the rounds that paid for them.
+`distil` exists because skills that are only ever added to become skills that are not read. Doing the distillation immediately after the round that produced the lesson is what keeps the rules in the skills current with the rounds that paid for them.
 
 ## Per-round closeout checklist (post-comment + evidence before continuing)
 
@@ -602,7 +602,7 @@ Three corrections were needed across issues #93 and #87 in a single session, all
 
 **Before committing any comment with a file:line reference, run `grep -n` to verify the cited line.** One command per reference; cheap; catches the drift before merge. The reviewer is the safety net; the orchestrator's pre-commit verification is the first line.
 
-The orchestrator's `pi-coder` brief template should include this requirement when the coder is asked to add file:line references.
+The orchestrator's `coder` brief template should include this requirement when the coder is asked to add file:line references.
 
 ### Widening an interface breaks every implementation
 

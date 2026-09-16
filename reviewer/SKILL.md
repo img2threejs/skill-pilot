@@ -1,11 +1,11 @@
 ---
-name: pi-reviewer
+name: reviewer
 description: Review a round as one of several parallel reviewers — three mandatory sweeps, the question that catches the most defects, and what a clean result has to be built from.
 ---
 
 # Review a round
 
-Read `pi-instruments` first.
+Read `instruments` first.
 
 ## What you are here
 
@@ -99,7 +99,7 @@ Every blocking finding ends with one line in this exact form:
 Prevented by: <skill>/<rule in a few words> — existed and followed | existed and not followed | no rule
 ```
 
-`pi-distil` runs after the round closes and triages findings on exactly that distinction, because the
+`distil` runs after the round closes and triages findings on exactly that distinction, because the
 three answers need three different repairs — a rule that was followed and still let the defect
 through is **wrong** and must be edited, not supplemented. Answer honestly against the skills as they
 are, not as you wish they were. `no rule` is a common and useful answer; naming a rule that does not

@@ -1,5 +1,5 @@
 ---
-name: pi-instruments
+name: instruments
 description: Measure, don't infer — the blind-instrument catalogue. Read before concluding anything from a command's output.
 ---
 

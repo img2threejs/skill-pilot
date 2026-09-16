@@ -1,11 +1,11 @@
 ---
-name: pi-coder
+name: coder
 description: Author a unit of work or a fix round as a dispatched agent — the standard, the failure modes that recur, and the obligations that close a round.
 ---
 
 # Author a round
 
-Read `pi-instruments` first.
+Read `instruments` first.
 
 ## What you are here
 
