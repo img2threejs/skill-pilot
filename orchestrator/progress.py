@@ -44,6 +44,30 @@ def _normalise(command: str) -> str:
     return first.strip()[:120]
 
 
+FAILED = re.compile(r"\b(error|failed|failure|exception|traceback|refus|cannot|not found|"
+                    r"exit(?:\s*code)?[:=\s]+[1-9]|✖|not ok|received sig(?:term|int)|"
+                    r"timed out|killed)\b", re.I)
+SUCCEEDED = re.compile(r"\bexit(?:\s*code)?[:=\s]+0\b", re.I)
+
+
+def _unsuccessful(output: str) -> bool:
+    """Whether a command's output reads as a failure.
+
+    A loop is a failure repeating, not an action repeating. Measured: pg-47 ran one demonstration
+    three times and got `7 of 7 gates, EXIT CODE: 0` each time — redundant, but succeeding, and
+    the first version of this detector called it LOOPING. An explicit success outranks the failure
+    words, because a passing run often prints the word `failed` while reporting zero of them.
+    """
+    # A run cut short is a failure even when it prints no failure word. pg-15's killed attempts
+    # said only "Received SIGTERM; restored server/worker.ts to HEAD and exiting." — no error, no
+    # exit code — and read as success, which turned a real loop into REDUNDANT.
+    if FAILED.search(output):
+        return True
+    if SUCCEEDED.search(output):
+        return False
+    return bool(FAILED.search(output))
+
+
 def _signature(output: str) -> str:
     """A short, drift-free fingerprint of a command's output.
 
@@ -57,7 +81,7 @@ def _signature(output: str) -> str:
     return text.strip()[-300:]
 
 
-def calls(transcript: Path) -> list[tuple[str, str, str]]:
+def calls(transcript: Path) -> list[tuple[str, str, str, bool]]:
     """(timestamp, command, result-signature) per tool call, oldest first.
 
     The result is what separates a loop from work. `npm test` three times in a dozen calls is an
@@ -71,6 +95,7 @@ def calls(transcript: Path) -> list[tuple[str, str, str]]:
         return out
     pending: dict[str, tuple[str, str]] = {}
     results: dict[str, str] = {}
+    raw_results: dict[str, str] = {}
     order: list[str] = []
     for line in lines:
         if not line.strip():
@@ -90,10 +115,12 @@ def calls(transcript: Path) -> list[tuple[str, str, str]]:
             text = " ".join(c.get("text", "") for c in (message.get("content") or [])
                             if c.get("type") == "text")
             results[message.get("toolCallId", "")] = _signature(text)
+            raw_results[message.get("toolCallId", "")] = text
     for call_id in order:
         if call_id in pending:
             timestamp, command = pending[call_id]
-            out.append((timestamp, command, results.get(call_id, "")))
+            raw = raw_results.get(call_id, "")
+            out.append((timestamp, command, results.get(call_id, ""), _unsuccessful(raw)))
     return out
 
 
@@ -106,17 +133,19 @@ def verdict(transcript: Path, produced_recently: bool, at: float | None = None) 
     """
     history = calls(transcript)
     if at is not None:
-        history = [(t, c, sig) for t, c, sig in history
+        history = [(t, c, sig, bad) for t, c, sig, bad in history
                    if t and time.mktime(time.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")) <= at]
     if not history:
         return "UNKNOWN", "no transcript"
 
     window = history[-WINDOW:]
-    counts = Counter((_normalise(c), sig) for _, c, sig in window if sig)
+    counts = Counter((_normalise(c), sig, bad) for _, c, sig, bad in window if sig)
     if counts:
-        (command, _), repeats = counts.most_common(1)[0]
+        (command, _, bad), repeats = counts.most_common(1)[0]
         if repeats >= REPEAT_LIMIT:
-            return "LOOPING", f"same command, same result {repeats}x: {command[:55]}"
+            if bad:
+                return "LOOPING", f"same failure {repeats}x: {command[:55]}"
+            return "REDUNDANT", f"same passing command {repeats}x: {command[:50]}"
 
     if not produced_recently:
         first = history[0][0]
@@ -126,4 +155,4 @@ def verdict(transcript: Path, produced_recently: bool, at: float | None = None) 
                        - time.mktime(time.strptime(span[:19], "%Y-%m-%dT%H:%M:%S")))
             if elapsed > GRIND_SECONDS:
                 return "GRINDING", f"{len(window)} calls over {int(elapsed // 60)}m, nothing produced"
-    return "MOVING", f"{len({_normalise(c) for _, c, _ in window})} distinct actions in last {len(window)}"
+    return "MOVING", f"{len({_normalise(c) for _, c, _, _ in window})} distinct actions in last {len(window)}"
