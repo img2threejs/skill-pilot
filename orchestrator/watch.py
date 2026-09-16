@@ -39,29 +39,28 @@ def git(worktree: str, *args: str) -> str:
 
 
 def log_path(worktree: str) -> Path | None:
-    """The transcript pilot.py wrote for the run in this worktree, if there is one.
+    """PI's own session transcript for this worktree — the file it writes as it works.
 
-    The old version stripped `pg-` and globbed `/tmp/claude-*/**/scratchpad/<n>*.log`, which
-    matched by a bare number prefix: for pg-11 it found `11b-m3.log` from a DIFFERENT run the
-    previous day and reported its 6188KB as this run's progress. Two other worktrees matched
-    nothing and were reported as `log 0KB` — an absence printed as a measurement.
+    Three wrong answers preceded this one. First the glob `/tmp/claude-*/**/scratchpad/<n>*.log`
+    matched by bare number prefix and reported a DIFFERENT run's day-old 6MB file as pg-11's
+    progress, while two other worktrees matched nothing and printed `log 0KB` — an absence
+    dressed as a measurement. Then pilot.py's own capture turned out to hold 111 bytes for a
+    whole run: PI writes nothing to stdout, so that file is not a progress signal either.
 
-    pilot.py records the log it opened in the sidecar JSON, so ask it rather than guessing from
-    a name. Only a log whose run is still the newest for that unit counts.
+    PI keeps a JSONL transcript per working directory under ~/.pi/agent/sessions/, and it grows
+    on every model turn — including the reading-and-verifying turns that touch no file at all,
+    which is exactly when the other signals go quiet and the agent looks stalled. Measured:
+    1.8MB over 425 lines for a run whose worktree had not been written to in 89 minutes.
     """
-    unit = Path(worktree).name.replace("pg-", "")
-    state = Path.home() / ".local/state/pi-pilot"
-    runs = sorted(state.glob(f"{unit}-*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-    for run in runs:
-        try:
-            recorded = json.loads(run.read_text()).get("log")
-        except (OSError, ValueError):
-            continue
-        if recorded and Path(recorded).exists():
-            return Path(recorded)
-        candidate = run.with_suffix(".log")
-        return candidate if candidate.exists() else None
-    return None
+    # PI's encoding, measured rather than guessed: `/home/team/workspaces/pg-15` becomes
+    # `--home-team-workspaces-pg-15--`. Leading slash contributes the first dash, and the name
+    # is closed with two. Getting this wrong fails silently — the directory simply is not there
+    # and the transcript reads as 0KB, which is the same wrong answer this function has already
+    # given twice under different causes.
+    slug = "-" + str(Path(worktree).resolve()).replace("/", "-") + "--"
+    directory = Path.home() / ".pi/agent/sessions" / slug
+    sessions = sorted(directory.glob("*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)
+    return sessions[0] if sessions else None
 
 
 def descendant_cpu(pid: int) -> tuple[int, float]:
@@ -129,12 +128,14 @@ def look(worktree: str, previous: dict) -> dict:
         detail = (f"{commits} commit(s), clean" if verdict == "DONE"
                   else f"{commits} commit(s), {len(dirty)} file(s) left uncommitted")
     else:
-        # `size` is display only. Measured on every run today: pi writes 111 bytes — its
-        # startup warning — and nothing more for the whole run, so log growth is not evidence
-        # of anything here. Liveness comes from edited files and from descendant CPU.
-        moved = idle is not None and idle < 120
+        # The transcript's mtime is when PI last appended a turn, and it needs no baseline —
+        # `size > previous` is trivially true on the first poll, so every worktree read WORKING
+        # the first time it was looked at, whatever its real state.
+        turn_idle = round(time.time() - transcript.stat().st_mtime) if transcript else None
+        moved = (turn_idle is not None and turn_idle < 180) or (idle is not None and idle < 120)
         if moved:
-            verdict, detail = "WORKING", f"{commits} commit(s), just edited a file"
+            when = f"last turn {turn_idle}s ago" if turn_idle is not None else "no transcript"
+            verdict, detail = "WORKING", f"{commits} commit(s), {size // 1024}KB, {when}"
         elif busy:
             verdict = "WORKING"
             detail = (f"{commits} commit(s), running a command"
