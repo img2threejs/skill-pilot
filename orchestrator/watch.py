@@ -21,6 +21,8 @@ import json
 import os
 import subprocess
 import sys
+
+import progress
 import time
 from pathlib import Path
 
@@ -134,8 +136,17 @@ def look(worktree: str, previous: dict) -> dict:
         turn_idle = round(time.time() - transcript.stat().st_mtime) if transcript else None
         moved = (turn_idle is not None and turn_idle < 180) or (idle is not None and idle < 120)
         if moved:
-            when = f"last turn {turn_idle}s ago" if turn_idle is not None else "no transcript"
-            verdict, detail = "WORKING", f"{commits} commit(s), {size // 1024}KB, {when}"
+            # Alive is not the same as getting somewhere. An agent repeating one failing
+            # command appends a transcript turn every few seconds and reads as WORKING forever;
+            # pg-15 did exactly that for eighty minutes. progress.verdict reads what the turns
+            # actually contain.
+            made, why = progress.verdict(transcript, produced_recently=bool(idle and idle < 600)) \
+                if transcript else ("UNKNOWN", "no transcript")
+            if made in ("LOOPING", "GRINDING"):
+                verdict, detail = made, f"{commits} commit(s), {why}"
+            else:
+                when = f"last turn {turn_idle}s ago" if turn_idle is not None else "no transcript"
+                verdict, detail = "WORKING", f"{commits} commit(s), {when}, {why}"
         elif busy:
             verdict = "WORKING"
             detail = (f"{commits} commit(s), running a command"
@@ -176,7 +187,8 @@ def main() -> int:
             rows.append(f"  {Path(worktree).name:<12} {s['verdict']:<8} {s['detail']}")
         print(f"[{time.strftime('%H:%M:%S')}]")
         print("\n".join(rows))
-        needs_attention = [w for w in args if state[w]["verdict"] in ("STALLED", "FAILED")]
+        needs_attention = [w for w in args
+                           if state[w]["verdict"] in ("STALLED", "FAILED", "LOOPING", "GRINDING")]
         if needs_attention:
             print(f"  ATTENTION: {', '.join(Path(w).name for w in needs_attention)}")
         if not interval or all(state[w]["pid"] is None for w in args):
