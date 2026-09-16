@@ -2,6 +2,19 @@
 
 Every line here exists because it was got wrong at least once. Count in brackets.
 
+**Nine of them have been broken twice or more, and almost every repeat was a shell idiom retyped
+by hand.** Writing the correct incantation down did not stop the wrong one: the `ps -e` trap was
+recorded here and then used again by the very next tool written after it. So those rules are no
+longer sentences to remember — they are functions to call.
+
+```
+orchestrator/probe.py   alive(pid) · run(cmd) · footer_count(repo, range) · stalled(worktree, log, pid)
+orchestrator/sweep.py   what an agent run left behind, and what must never be killed
+```
+
+`run()` refuses a command that pipes into a filter, because its exit status would be the
+filter's. A guard beats a reminder.
+
 ## Before launching an agent
 
 - [ ] **`nohup` for the agent, harness background for a monitor that watches it** [2]. Neither
@@ -61,9 +74,9 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **Open a grep hit before dismissing it as noise** [1]. `AGENTS.md` appearing inside a
       harness's own source was read as the harness documenting itself; it was the loader, and the
       verdict written from that dismissal was wrong in the file for a day.
-- [ ] **Grep for the thing, not for text about the thing** [2]. An unanchored search matched a
-      commit body saying "no Co-Authored-By trailer", and a comment explaining why
-      `single-page-application` is *not* set. Anchor, or read the match before believing it.
+- [ ] **Anchor a search for a marker** [2]. Call `probe.footer_count(repo, range)` for AI
+      trailers. An unanchored grep matched a commit body that *said* "no Co-Authored-By trailer",
+      and a clean commit was amended for a violation that never existed.
 - [ ] **Never cast a probe's arguments to silence the compiler** [1]. An `as never` on a config
       object hid that `repo` is `{owner, repo}` and not a string; the call reached GitHub as
       `repos/undefined/undefined/...`, returned 404, and the publisher's own "the repo does not
@@ -93,17 +106,16 @@ by-hand version of it nearly took production down, see below.
 - [ ] **Diagnose a quiet agent by file mtime, not by log growth** [1]. The log had not moved, but
       neither had any file it had edited — last write 1h44m earlier — and the CPU total agreed.
       Three signals agreeing is a stall; one is a guess.
-- [ ] **`ps -e` overrides `-p`** [**2**]. `ps -eo pid --no-headers -p <pid>` prints every process
-      on the host — a check for "did these four die" answered "182 alive", and a monitor built the
-      same way reported a dead agent as running for 56 minutes. Writing this line down did not
-      stop the second occurrence: the next tool written after it used the broken form again.
-      **The only reliable form is `ps -p <pid> -o pid=` with no `-e`.** Better still, do not write
-      a liveness check by hand — `sweep.py` has one, use it.
+- [ ] **Never write a liveness check by hand** [2]. Call `probe.alive(pid)`. `ps -eo pid -p <pid>`
+      prints every process on the host; that form answered "182 alive" about four dead ones, and
+      ran a monitor that called a finished agent live for 56 minutes.
 
 ## Before calling something stuck
 
-- [ ] **Log growth over ≥60s, not a single sample** [3]. PI writes at the end; "idle 708s" read
-      as stuck was wrong three times.
+- [ ] **Never call an agent stuck from one signal** [3]. Call `probe.stalled(worktree, log,
+      pid)`: it wants the process alive, the log flat across a real window, **and** nothing it
+      edits touched for far longer. A quiet log alone was read as death three times; pi writes its
+      transcript at the end.
 - [ ] **Process lookup, never `pkill -f <pattern>`** [2] — the pattern matches my own shell's
       command line and kills it.
 
