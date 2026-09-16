@@ -28,7 +28,20 @@ import sys
 KILL = "--kill" in sys.argv
 DISK = "--disk" in sys.argv
 WORKSPACES = "/home/team/workspaces"
-AGENT_PATTERNS = (re.compile(r"\bpi -p\b"), re.compile(r"pilot\.py\b"))
+# An agent is identified by its process NAME, not by the arguments it was launched with.
+# PI execs node and node then sets its process title to `pi` — one word, no path, no
+# flags — so a pattern like `pi -p` matches the launch command and never a running agent.
+# Measured: with a live PI working in pg-15 and two wedged ones 4 and 5 days old, this
+# script reported "live agents: none" and "no leftovers". A sweep that cannot see a live
+# agent is one --kill away from killing the work it was written to protect.
+AGENT_COMMS = frozenset({"pi", "dsh"})
+AGENT_PATTERNS = (re.compile(r"pilot\.py\b"),)
+# An agent that has spent almost no CPU over a long life is not working, it is wedged —
+# the documented `pi -p` stdin hang burns 0.94 seconds in 8h50m. Flagged, never killed
+# without --kill, and only past MIN_WEDGED_AGE so a starting agent is never mistaken for
+# a stuck one.
+MIN_WEDGED_AGE = 2 * 3600
+WEDGED_CPU_RATIO = 0.005
 # What an agent run leaves behind: servers it started, test runners, bundlers.
 LEFTOVER = re.compile(r"(dist-server/server\.mjs|procedural-server\.mjs|tests/run\.mjs"
                       r"|node_modules/\.bin/vite|--test-coverage|esbuild)")
@@ -50,18 +63,51 @@ def alive(pid: int) -> bool:
         return True  # exists, owned by someone else
 
 
+def end(pid: int) -> None:
+    """SIGTERM, then SIGKILL if it is still there.
+
+    A wedged PI does not answer SIGTERM: both four-day-old ones measured here survived it
+    and needed SIGKILL. A sweep that sends TERM and reports success leaves them running.
+    """
+    import time as _time
+    try:
+        os.kill(pid, 15)
+    except ProcessLookupError:
+        print(f"  ended pid={pid}")
+        return
+    _time.sleep(3)
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        print(f"  ended pid={pid}")
+        return
+    try:
+        os.kill(pid, 9)
+        print(f"  ended pid={pid} (needed SIGKILL)")
+    except ProcessLookupError:
+        print(f"  ended pid={pid}")
+
+
 def ps_all() -> list[dict]:
     out = subprocess.run(
-        ["ps", "-eo", "pid=,ppid=,etimes=,pcpu=,comm=,args="],
+        # `cputimes` is total CPU seconds consumed. It is what separates an agent that is
+        # working from one that is merely alive; `pcpu` is an average over the process's
+        # whole life and reads as ~0 for both.
+        ["ps", "-eo", "pid=,ppid=,etimes=,cputimes=,pcpu=,comm=,args="],
         capture_output=True, text=True).stdout
     rows = []
     for line in out.splitlines():
-        parts = line.split(None, 5)
-        if len(parts) < 6:
+        parts = line.split(None, 6)
+        if len(parts) < 7:
             continue
-        pid, ppid, etimes, pcpu, comm, args = parts
+        pid, ppid, etimes, cputimes, pcpu, comm, args = parts
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            cwd = ""          # gone, or owned by another user — not a reason to guess
         rows.append({"pid": int(pid), "ppid": int(ppid), "etimes": int(etimes),
-                     "cpu": float(pcpu), "comm": comm, "args": args})
+                     "cputimes": int(cputimes), "cpu": float(pcpu), "comm": comm,
+                     "args": args, "cwd": cwd})
     return rows
 
 
@@ -98,7 +144,18 @@ def disk_report(reclaim: bool = False) -> None:
 
 rows = ps_all()
 by_pid = {r["pid"]: r for r in rows}
-live_agents = {r["pid"] for r in rows if any(p.search(r["args"]) for p in AGENT_PATTERNS)}
+live_agents = {r["pid"] for r in rows
+               if r["comm"] in AGENT_COMMS or any(p.search(r["args"]) for p in AGENT_PATTERNS)}
+
+
+def wedged(row: dict) -> str | None:
+    """An agent process that is alive but has done nothing for a long time."""
+    if row["comm"] not in AGENT_COMMS or row["etimes"] < MIN_WEDGED_AGE:
+        return None
+    if row["cputimes"] > row["etimes"] * WEDGED_CPU_RATIO:
+        return None
+    return (f"{row['cputimes']}s CPU in {row['etimes'] // 3600}h — wedged, "
+            f"cwd={row['cwd'] or '?'}")
 
 
 def ancestry(pid: int) -> list[dict]:
@@ -139,6 +196,16 @@ for row in candidates:
 if DISK:
     disk_report(KILL)
 print(f"live agents: {sorted(live_agents) or 'none'}")
+
+stuck = [(r, why) for r in rows if (why := wedged(r))]
+for row, why in stuck:
+    print(f"  WEDGED  pid={row['pid']:<8} {why}")
+if stuck and not KILL:
+    print(f"  {len(stuck)} wedged agent(s) hold memory and a model session. --kill ends them.")
+if stuck and KILL:
+    for row, _ in stuck:
+        end(row["pid"])
+    print(f"  ended {len(stuck)} wedged agent(s)")
 for row, why in kept:
     print(f"  keep    pid={row['pid']:<8} {why:<28} {row['args'][:60]}")
 if not orphans:
