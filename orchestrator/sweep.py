@@ -133,11 +133,19 @@ def disk_report(reclaim: bool = False) -> None:
          "2>/dev/null | tr ' ' '\\n' | grep -cE '^[0-9a-f]{64}$' || true"],
         capture_output=True, text=True).stdout.strip() or "0"
     print(f"disk {used} used, {avail} free | {anon} anonymous volume(s), {in_use} in use")
-    if int(anon) and not int(in_use) and reclaim:
+    # Reclaim whenever there is anything to reclaim. The earlier condition also required
+    # in_use == 0, which is never true on a host running containers — so on the only host
+    # this script exists for, it never reclaimed anything, and the disk filled twice while
+    # the report said how to fix it. `docker volume rm` refuses a volume that is attached,
+    # so the in-use ones are protected by Docker rather than by declining to run.
+    if int(anon) and reclaim:
         subprocess.run(["bash", "-c",
                         "docker volume ls -q | grep -E '^[0-9a-f]{64}$' | xargs -r -n50 docker volume rm"],
                        capture_output=True)
-        print("  reclaimed — none of them was attached to a running container")
+        after = subprocess.run(["bash", "-c",
+                                "docker volume ls -q | grep -cE '^[0-9a-f]{64}$' || true"],
+                               capture_output=True, text=True).stdout.strip() or "0"
+        print(f"  reclaimed {int(anon) - int(after)}; {after} left (attached, refused by docker)")
     elif int(anon) and not reclaim:
         print("  pass --disk with --kill to reclaim them")
 
