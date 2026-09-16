@@ -99,16 +99,17 @@ def agent_pid(worktree: str) -> int | None:
             continue
         pid, ppid, comm, args = int(parts[0]), int(parts[1]), parts[2], parts[3]
         rows.append((pid, ppid, comm, args))
-    # The agent itself first: `pi` renames its own process, pilot.py carries --cwd.
-    for pid, _, comm, args in rows:
-        if comm == "pi" or ("pilot.py" in args and f"--cwd {worktree}" in args):
-            if comm == "pi" or worktree in args:
-                return pid
-    # Otherwise the launcher that names this worktree, so the caller gets something rather than
-    # a silent None that reads as "nothing is running".
-    for pid, _, _, args in rows:
-        if worktree in args and ("pi -p" in args or "pilot.py" in args):
+    # `pi` renames its own process to `pi` and drops its arguments, so it cannot be attributed
+    # to a worktree directly — find the launcher that names the worktree, then its `pi` child.
+    # Matching on `comm == "pi"` alone returns whatever stray run is oldest on the host, which is
+    # how this helper first reported a four-day-old process as the agent for a fresh worktree.
+    launchers = [pid for pid, _, _, args in rows
+                 if worktree in args and ("pi -p" in args or "pilot.py" in args)]
+    for pid, ppid, comm, args in rows:
+        if ppid in launchers and (comm == "pi" or "pilot.py" in args):
             return pid
+    for pid in launchers:
+        return pid
     return None
 
 
