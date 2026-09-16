@@ -17,6 +17,7 @@ Each worktree gets one of four verdicts:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -44,20 +45,44 @@ def log_path(worktree: str) -> Path | None:
     return None
 
 
-def descendants_busy(pid: int) -> bool:
-    """True when the agent has any live descendant process.
+def descendant_cpu(pid: int) -> tuple[int, float]:
+    """Total CPU seconds burned by the agent's descendants, and the age of the youngest.
 
-    An agent between model turns has no children; one running a build, a test suite or a shell
-    command does. That is the difference between stuck and thinking-and-working, and file mtime
-    cannot see it.
+    Having a child is not the same as working. Measured: pg-15 sat 81 minutes with a live
+    child shell whose own child was a `node -e` holding `setInterval` and ignoring SIGTERM —
+    the agent had written `kill -TERM $PID; wait $PID` against a process whose handler only
+    logs and never exits, so `wait` could never return. The child existed, used zero CPU, and
+    an earlier version of this check called that WORKING for 81 minutes.
+
+    CPU that is still climbing is work. A child that just appeared has not had time to burn
+    any, so its age is reported too and the caller treats a fresh one as work.
     """
-    children: list[int] = []
+    stack, total, youngest = [pid], 0, float("inf")
+    seen: set[int] = set()
+    ticks = os.sysconf("SC_CLK_TCK")
     try:
-        with open(f"/proc/{pid}/task/{pid}/children") as fh:
-            children = [int(x) for x in fh.read().split()]
-    except (OSError, ValueError):
-        return False
-    return bool(children)
+        uptime = float(open("/proc/uptime").read().split()[0])
+    except OSError:
+        uptime = 0.0
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        try:
+            with open(f"/proc/{current}/task/{current}/children") as fh:
+                stack.extend(int(x) for x in fh.read().split())
+        except (OSError, ValueError):
+            continue
+        if current == pid:
+            continue
+        try:
+            fields = open(f"/proc/{current}/stat").read().rsplit(") ", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        total += (int(fields[11]) + int(fields[12])) // ticks      # utime + stime
+        youngest = min(youngest, uptime - int(fields[19]) / ticks)  # starttime
+    return total, youngest
 
 
 def look(worktree: str, previous: dict) -> dict:
@@ -75,7 +100,10 @@ def look(worktree: str, previous: dict) -> dict:
     # grep and a SIGTERM probe, and this function called it STALLED. Verification is mostly
     # reading and running, not writing, so file mtime alone cries wolf on exactly the agents
     # being most careful — and a false STALLED is what leads to killing work in progress.
-    busy = descendants_busy(pid) if pid else False
+    child_cpu, youngest_child = descendant_cpu(pid) if pid else (0, float("inf"))
+    # Work is CPU that is still climbing, or a child too young to have burned any yet. A child
+    # sitting at a flat CPU total across a whole poll is not evidence of anything.
+    busy = youngest_child < 120 or child_cpu > previous.get("child_cpu", -1)
 
     if pid is None:
         verdict = "DONE" if commits and not dirty else "FAILED"
@@ -89,11 +117,16 @@ def look(worktree: str, previous: dict) -> dict:
             verdict = "WORKING"
             detail = (f"{commits} commit(s), running a command"
                       f"{f', nothing edited for {idle // 60}m' if idle else ''}")
+        elif youngest_child < float("inf"):
+            verdict = "STALLED"
+            detail = (f"{commits} commit(s), child alive but 0 CPU for a full poll"
+                      f"{f', nothing edited for {idle // 60}m' if idle else ''}")
         elif idle is not None and idle > STALL_SECONDS:
             verdict, detail = "STALLED", f"nothing edited for {idle // 60}m, log flat, no child running"
         else:
             verdict, detail = "WORKING", f"{commits} commit(s), quiet but recent"
-    return {"verdict": verdict, "detail": detail, "size": size, "pid": pid}
+    return {"verdict": verdict, "detail": detail, "size": size, "pid": pid,
+            "child_cpu": child_cpu}
 
 
 def main() -> int:
