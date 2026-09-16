@@ -150,6 +150,66 @@ def disk_report(reclaim: bool = False) -> None:
         print("  pass --disk with --kill to reclaim them")
 
 
+# Containers the test suite starts and does not always remove. Names come from the test
+# FILE, not the worktree — `pg14-` is admissionLedger.test.ts — so a running agent's tests
+# create containers with the same prefixes as an abandoned run's. Prefix is therefore not a
+# safe discriminator; age plus an idle connection count is. Measured: 18 leaked postgres
+# containers aged 2 to 3.5 hours, alongside four live ones under 12 minutes old.
+TEST_CONTAINER = re.compile(r"^(pg\d+[a-z]*|pg\d+own)-")
+# Never touch these, whatever their age. `playground-job-results-db` is postgres:18 exactly
+# like the test containers, so filtering on the image alone would have taken the production
+# database down; an earlier draft of this filter also matched `playground-app`.
+PROTECTED_CONTAINER = re.compile(r"^(playground-|traefik$)")
+MIN_CONTAINER_AGE = 3600
+
+
+def container_report(reclaim: bool = False) -> None:
+    listed = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.CreatedAt}}"],
+        capture_output=True, text=True).stdout
+    stale = []
+    for line in listed.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or parts[1] != "postgres:18":
+            continue
+        name = parts[0]
+        if PROTECTED_CONTAINER.search(name) or not TEST_CONTAINER.search(name):
+            continue
+        started = subprocess.run(
+            ["docker", "inspect", name, "--format", "{{.State.StartedAt}}"],
+            capture_output=True, text=True).stdout.strip()
+        age = subprocess.run(["date", "-d", started, "+%s"], capture_output=True, text=True).stdout.strip()
+        if not age or time.time() - int(age) < MIN_CONTAINER_AGE:
+            continue
+        # A container with a live client backend belongs to a run in progress, however old
+        # it looks. Postgres counts its own background workers in pg_stat_activity, so the
+        # backend_type filter is what makes this a count of clients rather than of eight.
+        env = subprocess.run(["docker", "inspect", name, "--format",
+                              "{{range .Config.Env}}{{println .}}{{end}}"],
+                             capture_output=True, text=True).stdout
+        password = next((l.split("=", 1)[1] for l in env.splitlines()
+                         if l.startswith("POSTGRES_PASSWORD=")), "")
+        clients = subprocess.run(
+            ["docker", "exec", "-e", f"PGPASSWORD={password}", name, "psql", "-U", "postgres", "-tAc",
+             "select count(*) from pg_stat_activity "
+             "where backend_type='client backend' and pid<>pg_backend_pid()"],
+            capture_output=True, text=True).stdout.strip()
+        if clients != "0":
+            continue      # busy, or the probe failed — either way, not ours to remove
+        stale.append((name, int((time.time() - int(age)) // 60)))
+
+    if not stale:
+        print("no stale test containers")
+        return
+    for name, minutes in stale:
+        print(f"  STALE   {name:<24} {minutes}m old, 0 client backends")
+    if not reclaim:
+        print(f"  {len(stale)} stale test container(s). --kill removes them.")
+        return
+    subprocess.run(["docker", "rm", "-f", *[n for n, _ in stale]], capture_output=True)
+    print(f"  removed {len(stale)} stale test container(s)")
+
+
 rows = ps_all()
 by_pid = {r["pid"]: r for r in rows}
 live_agents = {r["pid"] for r in rows
@@ -203,6 +263,7 @@ for row in candidates:
 
 if DISK:
     disk_report(KILL)
+    container_report(KILL)
 print(f"live agents: {sorted(live_agents) or 'none'}")
 
 stuck = [(r, why) for r in rows if (why := wedged(r))]
