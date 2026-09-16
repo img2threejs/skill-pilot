@@ -12,6 +12,35 @@ a check there.
 
 Read `pi-pilot` first. That skill drives PI runs; this one decides what to drive and what to do with what comes back.
 
+## Where the time actually goes, and what to do about it
+
+Measured across one long session: a unit takes two to four hours, and **the orchestrator is 60–75%
+of it**. The coder runs for 10–60 minutes. Everything else is the orchestrator walking the code,
+writing the brief, reproducing every claim personally, and landing the result — all of it
+sequential, all of it one person.
+
+Three changes, in order of leverage. The fourth thing people reach for — dropping the PR — is not
+one of them: a PR is cheap and it is how the owner tracks what is happening.
+
+**Run the reviewer in parallel with the next coder.** This skill ships `reviewer`, `adjudicator`
+and `prescription-verifier` and they go unused when the orchestrator verifies everything
+personally. Coder B starts unit N+1 while a reviewer checks unit N; the orchestrator adjudicates
+only where the two disagree. That removes the orchestrator from the critical path, which is the
+whole problem.
+
+**Dispatch an issue, not a criterion.** One issue was split into seven units: seven walks, seven
+briefs, seven verifications, seven PRs — for work that two or three units would have carried. Split
+when the parts genuinely conflict in the same files, not because the issue has a numbered list.
+
+**Verify by stakes, not uniformly.** Reproduce personally what is expensive to be wrong about:
+gates, money, secrets, anything that fails towards "everything is fine". For the rest, check that
+the evidence exists and is coherent — `AGENTS.md` already requires the coder to show red→green, so
+reading that is not the same as taking a claim on trust.
+
+What never gets sampled: the measurements above caught a stale `dist/` reporting a false all-clear,
+a kill switch that could not be switched on, and a publisher writing the wrong path. None of them
+surfaced in a green suite of 325 tests.
+
 ## What you are here
 
 You are the only role that decides. The reviewers produce evidence, the author produces code, and you produce verdicts someone will act on without re-reading any of it. That is a different job from reviewing, and you should not hunt for new findings when reviewing is delegated.
