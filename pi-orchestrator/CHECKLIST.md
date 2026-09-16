@@ -58,6 +58,9 @@ Every line here exists because it was got wrong at least once. Count in brackets
 - [ ] **`$?` after a pipe is the last command's status, not the one you care about** [3].
       `cmd | tail -3; echo $?` reports `tail`. Redirect to a file and read `$?` on its own line.
       This has produced a false "exit=0" on a run that exited 124, and twice more since.
+- [ ] **Open a grep hit before dismissing it as noise** [1]. `AGENTS.md` appearing inside a
+      harness's own source was read as the harness documenting itself; it was the loader, and the
+      verdict written from that dismissal was wrong in the file for a day.
 - [ ] **Grep for the thing, not for text about the thing** [2]. An unanchored search matched a
       commit body saying "no Co-Authored-By trailer", and a comment explaining why
       `single-page-application` is *not* set. Anchor, or read the match before believing it.
