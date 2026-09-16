@@ -44,6 +44,22 @@ def log_path(worktree: str) -> Path | None:
     return None
 
 
+def descendants_busy(pid: int) -> bool:
+    """True when the agent has any live descendant process.
+
+    An agent between model turns has no children; one running a build, a test suite or a shell
+    command does. That is the difference between stuck and thinking-and-working, and file mtime
+    cannot see it.
+    """
+    children: list[int] = []
+    try:
+        with open(f"/proc/{pid}/task/{pid}/children") as fh:
+            children = [int(x) for x in fh.read().split()]
+    except (OSError, ValueError):
+        return False
+    return bool(children)
+
+
 def look(worktree: str, previous: dict) -> dict:
     pid = agent_pid(worktree)
     commits = len(git(worktree, "log", "--oneline", "origin/staging..HEAD").splitlines())
@@ -54,6 +70,13 @@ def look(worktree: str, previous: dict) -> dict:
     newest = newest_mtime([str(Path(worktree) / f) for f in dirty]) if dirty else None
     idle = round(time.time() - newest) if newest else None
 
+    # An agent running a command is working, even when nothing it edits has moved and its log
+    # is flat. Measured: pg-15 sat 38 minutes without touching a file while a child shell ran a
+    # grep and a SIGTERM probe, and this function called it STALLED. Verification is mostly
+    # reading and running, not writing, so file mtime alone cries wolf on exactly the agents
+    # being most careful — and a false STALLED is what leads to killing work in progress.
+    busy = descendants_busy(pid) if pid else False
+
     if pid is None:
         verdict = "DONE" if commits and not dirty else "FAILED"
         detail = (f"{commits} commit(s), clean" if verdict == "DONE"
@@ -62,8 +85,12 @@ def look(worktree: str, previous: dict) -> dict:
         moved = size > previous.get("size", 0) or (idle is not None and idle < 120)
         if moved:
             verdict, detail = "WORKING", f"{commits} commit(s), log {size // 1024}KB"
+        elif busy:
+            verdict = "WORKING"
+            detail = (f"{commits} commit(s), running a command"
+                      f"{f', nothing edited for {idle // 60}m' if idle else ''}")
         elif idle is not None and idle > STALL_SECONDS:
-            verdict, detail = "STALLED", f"nothing edited for {idle // 60}m, log flat"
+            verdict, detail = "STALLED", f"nothing edited for {idle // 60}m, log flat, no child running"
         else:
             verdict, detail = "WORKING", f"{commits} commit(s), quiet but recent"
     return {"verdict": verdict, "detail": detail, "size": size, "pid": pid}
