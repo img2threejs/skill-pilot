@@ -17,6 +17,7 @@ Each worktree gets one of four verdicts:
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -38,10 +39,28 @@ def git(worktree: str, *args: str) -> str:
 
 
 def log_path(worktree: str) -> Path | None:
-    """The transcript a dispatch wrote for this worktree, if the convention was followed."""
-    name = Path(worktree).name.replace("pg-", "")
-    for candidate in Path("/tmp").glob(f"claude-*/**/scratchpad/{name}*.log"):
-        return candidate
+    """The transcript pilot.py wrote for the run in this worktree, if there is one.
+
+    The old version stripped `pg-` and globbed `/tmp/claude-*/**/scratchpad/<n>*.log`, which
+    matched by a bare number prefix: for pg-11 it found `11b-m3.log` from a DIFFERENT run the
+    previous day and reported its 6188KB as this run's progress. Two other worktrees matched
+    nothing and were reported as `log 0KB` — an absence printed as a measurement.
+
+    pilot.py records the log it opened in the sidecar JSON, so ask it rather than guessing from
+    a name. Only a log whose run is still the newest for that unit counts.
+    """
+    unit = Path(worktree).name.replace("pg-", "")
+    state = Path.home() / ".local/state/pi-pilot"
+    runs = sorted(state.glob(f"{unit}-*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    for run in runs:
+        try:
+            recorded = json.loads(run.read_text()).get("log")
+        except (OSError, ValueError):
+            continue
+        if recorded and Path(recorded).exists():
+            return Path(recorded)
+        candidate = run.with_suffix(".log")
+        return candidate if candidate.exists() else None
     return None
 
 
@@ -110,9 +129,12 @@ def look(worktree: str, previous: dict) -> dict:
         detail = (f"{commits} commit(s), clean" if verdict == "DONE"
                   else f"{commits} commit(s), {len(dirty)} file(s) left uncommitted")
     else:
-        moved = size > previous.get("size", 0) or (idle is not None and idle < 120)
+        # `size` is display only. Measured on every run today: pi writes 111 bytes — its
+        # startup warning — and nothing more for the whole run, so log growth is not evidence
+        # of anything here. Liveness comes from edited files and from descendant CPU.
+        moved = idle is not None and idle < 120
         if moved:
-            verdict, detail = "WORKING", f"{commits} commit(s), log {size // 1024}KB"
+            verdict, detail = "WORKING", f"{commits} commit(s), just edited a file"
         elif busy:
             verdict = "WORKING"
             detail = (f"{commits} commit(s), running a command"
