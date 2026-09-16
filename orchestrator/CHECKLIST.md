@@ -113,6 +113,9 @@ by-hand version of it nearly took production down, see below.
 
 ## Before calling something stuck
 
+- [ ] **Ask for the agent's pid by worktree, never by hand** [1]. `probe.agent_pid(worktree)`.
+      A launcher's pid was passed to `stalled()` and reported a working agent as dead — the
+      `bash -c` wrapper had exited while `pi` went on underneath it.
 - [ ] **Never call an agent stuck from one signal** [3]. Call `probe.stalled(worktree, log,
       pid)`: it wants the process alive, the log flat across a real window, **and** nothing it
       edits touched for far longer. A quiet log alone was read as death three times; pi writes its

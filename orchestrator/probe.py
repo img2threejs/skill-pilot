@@ -83,6 +83,35 @@ def newest_mtime(paths: list[str]) -> float | None:
     return max(stamps) if stamps else None
 
 
+def agent_pid(worktree: str) -> int | None:
+    """The agent process working in this worktree, not the shell that launched it.
+
+    Passing a launcher's pid to `stalled()` reported a working agent as dead: the `bash -c`
+    wrapper had exited while `pi` went on underneath it. Ask by worktree and the question cannot
+    be posed wrongly.
+    """
+    out = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,comm=,args="], capture_output=True, text=True).stdout
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        pid, ppid, comm, args = int(parts[0]), int(parts[1]), parts[2], parts[3]
+        rows.append((pid, ppid, comm, args))
+    # The agent itself first: `pi` renames its own process, pilot.py carries --cwd.
+    for pid, _, comm, args in rows:
+        if comm == "pi" or ("pilot.py" in args and f"--cwd {worktree}" in args):
+            if comm == "pi" or worktree in args:
+                return pid
+    # Otherwise the launcher that names this worktree, so the caller gets something rather than
+    # a silent None that reads as "nothing is running".
+    for pid, _, _, args in rows:
+        if worktree in args and ("pi -p" in args or "pilot.py" in args):
+            return pid
+    return None
+
+
 def stalled(worktree: str, log: str | None = None, pid: int | None = None,
             window: int = 60) -> dict:
     """Is an agent stuck? Three signals, because one is a guess.
