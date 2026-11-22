@@ -33,7 +33,8 @@ error and mark the round BLOCKED; never fall through to an undeclared agent.
 
 ## Launch: `scripts/dispatch.sh`
 
-Always launch through `scripts/dispatch.sh` relative to the directory containing this file.
+Every agent run goes through `scripts/dispatch.sh` relative to the directory containing this file.
+Never launch or prompt agents by hand with `herdr agent start` or `herdr agent prompt`. Hand launches produce no audit row.
 Set `SKILL_DIR` to that directory and `PROJECT_ROOT` to the directory containing your checkouts for the examples below.
 herdr is the default for writers and readers.
 On `HERDR_NOT_RUNNING`, the orchestrator starts the server itself without stealing focus:
@@ -85,7 +86,7 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   sends input to, or closes the tabs and panes it created and tracks for the round.
 - For both herdr access modes, including resume, pass the project root with `--il` or set `HERDR_IL_PATH`.
   `--il` takes precedence. If neither supplies a value, dispatch prints `HERDR_IL_REQUIRED` and exits 2.
-  The checkout must be inside the project root. Exec launches and `--close` can run without this setting.
+  The checkout must be inside the project root. Exec launches, `--close` and `--decide` can run without this setting.
   For writers, dispatch creates `<il>/<repo>-wt-<label>` on `agent/<label>` and keeps both for review. It flags source repo changes, including
   edits to already-dirty files, with `EDITED_SOURCE_REPO` and direct sibling repo snapshot changes with
   `EDITED_SIBLING_REPO <name>`. The source snapshot excludes only `<round>/runs/` when the round is inside the source repo.
@@ -94,8 +95,8 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   Fingerprint comparisons cover siblings present at both snapshots, except those that started as detached
   linked worktrees named `*-rv-*` or linked worktrees on `agent/*` branches. The writer puts its report in
   `AGENT_REPORT.md` at the worktree root.
-  Dispatch records the branch and worktree in an `ABORTED` record as soon as it creates them and replaces
-  that record at closeout.
+  Dispatch records the branch and worktree as soon as it creates them. The record has `outcome=running`
+  until dispatch publishes the final outcome at exit.
 - For herdr readers, dispatch uses the supplied detached checkout and sets TMPDIR to a fresh `runs/<label>.tmp`.
   A pi reader runs as a pane command under `sandbox-exec` with `--no-session --tools read,bash`. If the sandbox
   fails to start, pi cannot launch. The pane runs a short launcher from scratch and reads its jq filter from a file.
@@ -106,6 +107,13 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   done or idle status and a fresh, non-empty report. A pi reader's pane command signals completion with its
   exit status. An empty report records `NO_REPORT`. The startup recovery wait allows 60 seconds and retries
   once when herdr returns `timeout`. A block during the prompt records `AGENT_BLOCKED`.
+- Herdr runs monitor progress during the prompt. Set `--stall <min>` or `DISPATCH_STALL_MIN` (default `8`).
+  The interval accepts fractional minutes and is independent of the overall timeout.
+  Dispatch tracks mtime and size of the Codex rollout matched to the run marker, the pi reader's events
+  stream, or the pi writer's session matched to the run marker. Until a transcript is available, it hashes
+  recent content from the run's own pane. Herdr agent status and workspace activity do not reset the interval.
+  Dispatch prints and logs `outcome=stalled` with `STALLED` and sends Ctrl+C. Readers preserve any saved
+  text as `PARTIAL_REPORT` and close their tab. Writers keep their tab for `--resume`.
 - Reviewers always use fresh sessions, including self review.
   Readers save any available report to `runs/<label>.out.md`, capture their pane and close their tab on exit.
   A timeout, execution error or interrupt with saved reader text records `PARTIAL_REPORT`. Dispatch sends Ctrl+C
@@ -209,16 +217,30 @@ product decision is unclear; do not let an agent guess it.
 
 ## Audit
 
-After verifying each run, append it:
+Dispatch writes one audit row at exit with the final fields from `runs/<label>.kv`, including for aborted
+and stalled runs. Use that row directly. If the writer is unavailable, dispatch prints `AUDIT_WRITER_MISSING`
+and includes it in the run note while preserving the run's outcome.
+
+Never act on a `.kv` whose outcome is `running`. Wait for the final outcome before making a verdict,
+resuming the run, or closing its tab or worktree.
+
+After every verdict, run `--decide`:
 
 ```zsh
-A="$PROJECT_ROOT/agent-audit"
-$A/log-run.sh ${(f)"$(<$R/runs/<label>.kv)"} claimed_done=<true|false> verified_done=<true|false> \
-  findings=<n> findings_accepted=<n>
+"$D" --decide --round "$R" --label review-decision --of rev-sol,rev-pi \
+  --verdict send-back --findings 3 --accepted 2 --note "Two findings require fixes"
 ```
 
-`verified_done` is Claude's check of the artifacts, not the agent's claim. `agent-audit` is the orchestrator's
-local log repo. Local commits are allowed there and are never pushed. `$A/scorecard.sh [phase]` shows passes,
+Use `merge`, `send-back`, `accept` or `reject` for `--verdict`. This appends one `phase=adjudicate`
+row with `agent=orchestrator` and `model` from `DISPATCH_ORCHESTRATOR_MODEL` (default `unknown`).
+The decision label, referenced run labels and verdict are in the row's note. Each referenced
+`.kv` gets the supplied `findings_accepted` count and `verified_done=true` for merge or accept,
+or `verified_done=false` for send-back or reject. The latest values supersede earlier ones.
+Runs and decisions use the same `agent-audit/log-run.sh` writer. For an audit directory outside the
+standard `agent-audit/rounds/<round>` layout, set `DISPATCH_AUDIT_DIR` to the directory containing `log-run.sh`.
+
+`verified_done` records Claude's check of the artifacts. `agent-audit` is the orchestrator's
+local log repo. Local commits are allowed there and are never pushed. `${PROJECT_ROOT}/agent-audit/scorecard.sh [phase]` shows passes,
 failures, hangs, errors, false-done, review precision and time per model. When a model's
 numbers drift, propose a roster change to the owner with the scorecard as evidence.
 
@@ -226,7 +248,7 @@ numbers drift, propose a roster change to the owner with the scorecard as eviden
 
 - The pi read sandbox restricts writes only. Reads and network access stay open.
 - Dispatch cannot disable the Codex built-in `cua_repl`. Disabling it with `-c` makes Codex exit with `invalid transport`.
-- Reviewers could alter other runs' files under `runs/`. The orchestrator verifies every `.kv` against artifacts before logging.
+- Reviewers could alter other runs' files under `runs/`. The orchestrator verifies each completed run against its artifacts before recording a verdict.
 
 ## Known traps (measured)
 

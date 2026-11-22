@@ -3,20 +3,21 @@
 #
 # dispatch.sh --round <round_dir> --label <name> --agent codex|pi --model <id> [--effort low|medium|high|xhigh]
 #             --access write|read [--via herdr|exec] --cwd <git_dir> --brief <file> --phase <phase> [--timeout <sec>] [--resume <label>]
-#             [--herdr-home <label>] [--il <project_root>]
+#             [--stall <min>] [--herdr-home <label>] [--il <project_root>]
 # dispatch.sh --round <round_dir> --close <label>
+# dispatch.sh --decide --round <round_dir> --label <label> --of <labels> --verdict <verdict>
+#             --findings <n> --accepted <n> [--note <text>]
 # Herdr launches require --il or HERDR_IL_PATH. Missing both gives HERDR_IL_REQUIRED (exit 2).
 #
 # Writes <round_dir>/runs/<label>.{log,out.md,kv}. The .kv file holds key=value lines for
-# agent-audit/log-run.sh; the orchestrator appends verified_done/findings after checking the artifacts.
+# agent-audit/log-run.sh. Dispatch logs each final run and each decision through that writer.
 # exit: 0 ran (check outcome in .kv), 2 bad usage.
 # Read-mode checks use TMPDIR (<round_dir>/runs/<label>.tmp); pi also needs two lock directories.
 # Read-mode snapshots exclude ignored files and the cache directories below.
-# Visible Codex model detection uses BSD/macOS-only find -newerBm.
 set -u
 zmodload zsh/zutil zsh/datetime
 skill_dir=${0:A:h:h}
-zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: || exit 2
+zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: || exit 2
 valid_label() {
   [[ -n $1 && $1 != */* && $1 != *$'\n'* && $1 != . && $1 != .. ]]
 }
@@ -24,6 +25,81 @@ valid_label() {
 kv_value() {
   sed -n "s/^$2=//p" "$1" | tail -n 1
 }
+
+audit_writer() {
+  local writer=${DISPATCH_AUDIT_DIR:-${il:-${round:h:h:h}}/agent-audit}/log-run.sh
+  if [[ -z ${DISPATCH_AUDIT_DIR:-} && ${round:h:t} == rounds ]]; then
+    writer=${round:h:h}/log-run.sh
+    [[ -x $writer ]] || writer=${il:-${round:h:h:h}}/agent-audit/log-run.sh
+  fi
+  print -r -- "$writer"
+}
+
+audit_row() {
+  local writer=$1
+  shift
+  if [[ ! -x $writer ]]; then
+    print -ru2 -- "$label: AUDIT_WRITER_MISSING: $writer"
+    return 127
+  fi
+  "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
+}
+
+record_decision() {
+  local round label=${o[--label]:-} verdict=${o[--verdict]:-}
+  local references=${o[--of]:-} findings=${o[--findings]:-} accepted=${o[--accepted]:-}
+  local note=${o[--note]:-} verified record ref key
+  local -Ua records
+  for key in "${(@k)o}"; do
+    case $key in
+      --decide|--round|--label|--of|--verdict|--findings|--accepted|--note) ;;
+      *) print -ru2 -- "unexpected decision option: $key"; return 2 ;;
+    esac
+  done
+  if (( $# )) || [[ -z ${o[--round]:-} || -z $references ]] || ! valid_label "$label" ||
+     [[ $findings != <-> || $accepted != <-> ]] || (( accepted > findings )); then
+    print -ru2 -- 'usage: dispatch.sh --decide --round <round_dir> --label <label> --of <labels> --verdict merge|send-back|accept|reject --findings N --accepted N [--note text]'
+    return 2
+  fi
+  round=${o[--round]:a}
+  case $verdict in
+    merge|accept) verified=true ;;
+    send-back|reject) verified=false ;;
+    *) print -ru2 -- "invalid --verdict: $verdict"; return 2 ;;
+  esac
+  for ref in "${(@s:,:)references}"; do
+    record=$round/runs/$ref.kv
+    if ! valid_label "$ref" || [[ ! -f $record || -L $record || ! -w $record ]]; then
+      print -ru2 -- "invalid or unwritable run record: $ref"
+      return 2
+    fi
+    if [[ $(kv_value "$record" outcome) == running ]]; then
+      print -ru2 -- "run still in progress: $ref"
+      return 2
+    fi
+    records+=("$record")
+  done
+  note=${note//$'\n'/ }
+  audit_row "$(audit_writer)" "round=${round:t}" "label=$label" "phase=adjudicate" "agent=orchestrator" \
+    "model=${DISPATCH_ORCHESTRATOR_MODEL:-unknown}" "outcome=$verdict" "verdict=$verdict" "of=$references" \
+    "secs=0" "exit=0" "verified_done=$verified" "findings=$findings" "findings_accepted=$accepted" \
+    "note=label=$label of=$references verdict=$verdict${note:+ $note}" || return 1
+  for record in "${records[@]}"; do
+    if ! print -rl -- "verified_done=$verified" "findings_accepted=$accepted" >> "$record"; then
+      print -ru2 -- "$label: decision logged, but could not update $record"
+      return 1
+    fi
+  done
+  print -r -- "$label: $verdict"
+}
+
+if (( ${+o[--decide]} )); then
+  record_decision "$@"
+  exit $?
+fi
+for k in of verdict findings accepted note; do
+  (( ! ${+o[--$k]} )) || { print -ru2 -- "--$k requires --decide"; exit 2; }
+done
 
 tab_matches() {
   jq -e --arg id "$1" --arg ws "$2" --arg label "$3" '
@@ -73,6 +149,10 @@ if (( ${+o[--close]} )); then
     echo "usage: dispatch.sh --round <round_dir> --close <label>" >&2; exit 2
   }
   record=${o[--round]:a}/runs/$label.kv
+  if [[ -f $record && $(kv_value "$record" outcome) == running ]]; then
+    print -ru2 -- "$label: run still in progress"
+    exit 2
+  fi
   [[ -f $record ]] && tab=$(kv_value "$record" herdr_tab) && [[ -n $tab ]] || {
     echo "$label: no recorded herdr tab" >&2; exit 2
   }
@@ -99,19 +179,26 @@ if (( ${+o[--close]} )); then
 fi
 for k in round label agent model access cwd brief phase; do [[ -n ${o[--$k]:-} ]] || { echo "missing --$k" >&2; exit 2; }; done
 round=${o[--round]:a} label=${o[--label]} agent=${o[--agent]} model=${o[--model]} effort=${o[--effort]:-medium}
+il=${o[--il]:-${HERDR_IL_PATH:-}}
 mode=${o[--access]} via=${o[--via]-herdr} cwd=${o[--cwd]:a} phase=${o[--phase]} tmo=${o[--timeout]:-1200}
 valid_label "$label" || { echo "invalid --label: $label" >&2; exit 2; }
 case $agent in codex|pi) ;; *) echo "invalid --agent: $agent" >&2; exit 2 ;; esac
 case $mode in read|write) ;; *) echo "invalid --access: $mode" >&2; exit 2 ;; esac
 case $via in exec|herdr) ;; *) echo "invalid --via: $via" >&2; exit 2 ;; esac
 if [[ $via == herdr ]]; then
-  il=${o[--il]:-${HERDR_IL_PATH:-}}
+  stall_min=${o[--stall]:-${DISPATCH_STALL_MIN:-8}}
+  if [[ $stall_min != <-> && $stall_min != <->.<-> ]] || (( stall_min <= 0 )); then
+    print -ru2 -- 'stall interval must be a positive number of minutes'
+    exit 2
+  fi
+  stall_secs=$(( stall_min * 60.0 ))
+  stall_poll=$(( stall_secs < 4 ? stall_secs / 4 : 1.0 ))
   [[ -n $il ]] || { print -ru2 -- "$label: HERDR_IL_REQUIRED: pass --il <project_root> or set HERDR_IL_PATH"; exit 2; }
 fi
 [[ -f "${o[--brief]}" && -s "${o[--brief]}" ]] || { echo "missing or empty brief: ${o[--brief]}" >&2; exit 2; }
 brief="$(<"${o[--brief]}")"
 repo_top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || { echo "not a git work tree: $cwd" >&2; exit 2; }
-base=$round/runs/$label; log=$base.log; out=$base.out.md
+base=$round/runs/$label; log=$base.log; out=$base.out.md; record_tmp=$base.kv.$$
 [[ ! -e $base.kv ]] || { echo "label already used: $label" >&2; exit 2; }
 mkdir -p "$round/runs" || exit 2
 if [[ $agent == pi ]]; then
@@ -149,7 +236,7 @@ snapshot_pi_state() (
     -o \( -type f -o -type l \) -print0 | xargs -0 stat -f '%N %z %m %i' | LC_ALL=C sort | shasum
 )
 st=$(date +%s); rc=0; real_model=$model; where=$cwd; detail=; workspace=; tab=; tab_label=$label; pane=; branch=; trust_accepted=
-scratch= events= mcp_builtin_on= mcp_failure= pane_exited= response= run_pid=
+scratch= events= stalled= transcript= mcp_builtin_on= mcp_failure= pane_exited= response= run_pid=
 resume=${o[--resume]:-} target=dispatch-$st-$$ herdr_closed= herdr_started= closed_idle= creating_tab=
 requested_model=$model
 [[ $agent == pi && $model != */* ]] && requested_model=minimax/$model
@@ -281,28 +368,67 @@ snapshot_siblings() {
   done
 }
 
-write_aborted() {
+stage_run_record() {
   {
-    print -rl -- "round=${round:t}" "label=$label" "phase=$phase" "agent=$agent" \
-      "model=$real_model" "outcome=error" "note=via=$via mode=$mode ${2:-ABORTED}$closed_idle" \
-      "repo=${repo_top:t}" "launcher=$via" "secs=$(( $(date +%s) - st ))" "exit=${1:-}" \
-      "branch=$branch" "where=$where"
+    print -rl -- "round=${round:t}" "repo=${repo_top:t}" "label=$label" "phase=$phase" "agent=$agent" \
+      "model=$real_model" "effort=$effort" "launcher=$via" "access=$mode" "where=$where" \
+      "secs=$secs" "exit=$1" "outcome=$outcome" "note=$note"
+    [[ $outcome == stalled ]] && print -r -- "code=STALLED"
+    [[ -n $branch ]] && print -r -- "branch=$branch"
     if [[ -n $tab ]]; then
-      print -rl -- "access=$mode" "herdr_workspace=$workspace" "herdr_tab=$tab" "herdr_tab_label=$tab_label" \
+      print -rl -- "herdr_workspace=$workspace" "herdr_tab=$tab" "herdr_tab_label=$tab_label" \
         "herdr_agent=$target" "herdr_started=$herdr_started"
       [[ -n $pane ]] && print -r -- "herdr_pane=$pane"
       if [[ $mode == write ]]; then print -r -- "herdr_source=$repo_top"; fi
     fi
-    [[ -n $resume && -n $tab ]] && print -r -- "resumed_from=$resume"
+    [[ -n $resume ]] && print -r -- "resumed_from=$resume"
     [[ -n $herdr_closed ]] && print -r -- "herdr_closed=$herdr_closed"
     true
-  } > "$base.kv"
+  } > "$record_tmp"
+}
+
+publish_run_record() {
+  if ! mv -f -- "$record_tmp" "$base.kv"; then
+    rm -f -- "$record_tmp"
+    print -ru2 -- "$label: RUN_RECORD_WRITE_FAILED"
+    return 1
+  fi
+}
+
+write_running_record() {
+  stage_run_record '' && publish_run_record
+}
+
+finish_run() {
+  trap '' INT TERM
+  if (( $1 != 0 )) || [[ $outcome == running ]]; then
+    rc=$1
+    outcome=error
+    note="$note ${detail:-SETUP_FAILED}$closed_idle"
+  fi
+  secs=$(( $(date +%s) - st ))
+  local writer audit_status
+  local -a record_lines
+  writer=$(audit_writer)
+  stage_run_record "$rc" || return 1
+  record_lines=("${(@f)$(<"$record_tmp")}")
+  audit_row "$writer" "${record_lines[@]}"
+  audit_status=$?
+  if (( audit_status != 0 )); then
+    case $audit_status in
+      127) note="$note AUDIT_WRITER_MISSING" ;;
+      *) note="$note AUDIT_WRITE_FAILED" ;;
+    esac
+    stage_run_record "$rc" || return 1
+  fi
+  publish_run_record || return 1
+  print -r -- "$label: $outcome${stalled:+ (STALLED)} rc=$rc ${secs}s model=$real_model where=$where out=$out"
 }
 
 refuse_resume() {
   if [[ -n $response ]]; then rm -f -- "$response"; fi
   workspace= tab= pane=
-  write_aborted 2 "RESUME_REFUSED:$1"
+  detail="RESUME_REFUSED:$1"
   print -ru2 -- "$label: RESUME_REFUSED:$1"
   exit 2
 }
@@ -387,7 +513,7 @@ abort_run() {
   fi
   if [[ $mode == read ]]; then save_reader_report; fi
   close_herdr_tab
-  if [[ $mode == read || -e $where/.git || -f $base.kv ]]; then write_aborted "$1" "ABORTED${detail:+ $detail}"; fi
+  detail="ABORTED${detail:+ ${detail# }}"
   if [[ -n $response && -s $response.err ]]; then cat "$response.err" >> "$log"; fi
   [[ -n $response ]] && rm -f -- "$response" "$response.err" "$base.launch"
   [[ -n $scratch ]] && rm -rf -- "$scratch"
@@ -414,6 +540,52 @@ herdr_agent_start_fits() {
   herdr_pane_input_fits "$command"
 }
 
+find_run_transcript() {
+  local session marker
+  while IFS= read -r -d '' session; do
+    if marker=$(grep -Fn -m1 -e "\"$json_marker\"" -e "\\n$json_marker\"" -e "\\n$json_marker\\n" -e "\"$json_marker\\n" -- "$session") ||
+       marker=$(grep -Fnx -m1 -- "$run_marker" "$session"); then
+      transcript=$session
+      transcript_marker_line=${marker%%:*}
+      return 0
+    fi
+  done < <(find "$session_root" -type f -name "$session_glob" -newer "$base.launch" -print0 2>/dev/null)
+  return 1
+}
+
+wait_for_herdr_progress() {
+  local fingerprint= previous= pane_text source
+  local -F last_progress=$SECONDS
+  while kill -0 "$run_pid" 2>/dev/null; do
+    source=$events
+    if [[ -z $source ]]; then
+      [[ -n $transcript ]] || find_run_transcript
+      source=$transcript
+    fi
+    if [[ -n $source ]] && fingerprint=$(stat -f 'file:%m:%z' -- "$source" 2>/dev/null); then
+      :
+    elif pane_text=$(timeout -k 1 2 herdr pane read "$pane" --source recent --lines 40 2>/dev/null); then
+      case ${(L)pane_text} in
+        ''|working) fingerprint= ;;
+        *) fingerprint="pane:$(print -rn -- "$pane_text" | shasum)" ;;
+      esac
+    else
+      fingerprint=
+    fi
+    if [[ -n $fingerprint && $fingerprint != "$previous" ]]; then
+      previous=$fingerprint
+      last_progress=$SECONDS
+    fi
+    if (( SECONDS - last_progress >= stall_secs && SECONDS < deadline )) &&
+       kill -0 "$run_pid" 2>/dev/null; then
+      stalled=1
+      kill "$run_pid" 2>/dev/null
+      break
+    fi
+    sleep "$stall_poll"
+  done
+}
+
 call_herdr() {
   local error_code='.error?.code? | strings | select(length > 0)'
   if [[ $1 == pane && ( $2 == run || $2 == send-text ) ]] && ! herdr_pane_input_fits "$4"; then
@@ -429,8 +601,18 @@ call_herdr() {
   else
     herdr "$@" > "$response" 2> "$response.err" &
     run_pid=$!
+    local watch_progress=
+    if [[ $1 == agent && $2 == prompt || $1 == pane && $2 == wait-output ]]; then
+      watch_progress=1
+      wait_for_herdr_progress
+    fi
     wait "$run_pid"
     herdr_rc=$? run_pid=
+    if [[ -n $watch_progress && -n $stalled ]]; then
+      herdr_error=STALLED
+      rm -f -- "$response.err"
+      return
+    fi
   fi
   cat "$response.err" >> "$log"
   herdr_error=$(jq -nr "first(inputs | $error_code)" "$response" 2>/dev/null)
@@ -584,12 +766,19 @@ idle_writer_tab() {
       (.agent_status == "idle" or .agent_status == "done")' "$response" >/dev/null
 }
 
+outcome=running secs=0 note="label=$label via=$via mode=$mode"
+trap 'finish_run $?' EXIT
+trap 'abort_run 130' INT
+trap 'abort_run 143' TERM
+write_running_record || exit 2
+
 if (( ${+o[--resume]} )); then
   [[ $mode == write ]] || refuse_resume read_access
   [[ $via == herdr ]] || refuse_resume not_herdr
   valid_label "$resume" || refuse_resume invalid_label
   record=$round/runs/$resume.kv
   [[ -f $record ]] || refuse_resume run_not_found
+  [[ $(kv_value "$record" outcome) != running ]] || refuse_resume run_in_progress
   [[ $(kv_value "$record" launcher) == herdr && $(kv_value "$record" access) == write ]] ||
     refuse_resume not_herdr_writer
   [[ $(kv_value "$record" agent) == "$agent" ]] || refuse_resume agent_mismatch
@@ -607,10 +796,6 @@ if (( ${+o[--resume]} )); then
   [[ -n $saved_target && -n $saved_pane ]] || refuse_resume agent_missing
 fi
 
-if [[ $mode == read ]]; then
-  trap 'abort_run 130' INT
-  trap 'abort_run 143' TERM
-fi
 if [[ $via == herdr ]]; then
   home_label=${o[--herdr-home]:-${DISPATCH_HERDR_HOME:-img2}}
   il=${il:A} repo_top=${repo_top:A} cwd=${cwd:A} where=${cwd:A}
@@ -637,15 +822,11 @@ if [[ $via == herdr ]]; then
     home_status=$?
     if (( home_signal )); then
       print -ru2 -- "$label: HERDR_HOME_TIMEOUT (interrupted during provisioning)"
-      write_aborted "$home_signal" 'ABORTED HERDR_HOME_TIMEOUT'
+      detail='ABORTED HERDR_HOME_TIMEOUT'
       exit "$home_signal"
     fi
-    if [[ $mode == read ]]; then
-      trap 'abort_run 130' INT
-      trap 'abort_run 143' TERM
-    else
-      trap - INT TERM
-    fi
+    trap 'abort_run 130' INT
+    trap 'abort_run 143' TERM
     case $home_status in
       0) workspace=$(jq -r '.workspace_id' <<< "$home") ;;
       124|130|137|143) rc=124; detail=HERDR_HOME_TIMEOUT ;;
@@ -715,16 +896,22 @@ if [[ $via == exec ]]; then
   esac
 elif (( rc == 0 )); then
   if [[ $mode == write ]]; then
-    trap 'abort_run 130' INT
-    trap 'abort_run 143' TERM
     if [[ -z $resume ]]; then
-      where=${il%/}/${repo_top:t}-wt-$label
-      branch=agent/$label
-      [[ ! -e $where && ! -L $where ]] || { echo "worktree path already exists: $where" >&2; exit 2; }
-      git -C "$repo_top" worktree add -b "$branch" "$where" HEAD || exit 2
+      writer_where=${il%/}/${repo_top:t}-wt-$label
+      writer_branch=agent/$label
+      [[ ! -e $writer_where && ! -L $writer_where ]] || {
+        print -ru2 -- "worktree path already exists: $writer_where"
+        detail=WORKTREE_PATH_EXISTS
+        exit 2
+      }
+      git -C "$repo_top" worktree add -b "$writer_branch" "$writer_where" HEAD ||
+        { detail=WORKTREE_CREATE_FAILED; exit 2; }
+      where=$writer_where branch=$writer_branch
+      write_running_record || abort_run 2
       typeset -A idle_tabs
       idle_order=()
       for record in "$round/runs/"*.kv(N); do
+        [[ $(kv_value "$record" outcome) != running ]] || continue
         [[ $(kv_value "$record" launcher) == herdr && $(kv_value "$record" access) == write ]] || continue
         id=$(kv_value "$record" herdr_tab)
         [[ -n $id && $(kv_value "$record" herdr_closed) != 1 ]] || continue
@@ -757,7 +944,7 @@ elif (( rc == 0 )); then
     fi
   fi
   [[ $agent == pi ]] && real_model=$requested_model
-  write_aborted || { [[ -n $scratch ]] && rm -rf -- "$scratch"; exit 2; }
+  write_running_record || abort_run 2
   margs=(--model "$model")
   if [[ $agent == codex ]]; then
     margs=(-m "$model" -c "model_reasoning_effort=$effort" -c check_for_update_on_startup=false)
@@ -791,8 +978,19 @@ elif (( rc == 0 )); then
   fi
   if [[ $agent == codex && -n ${CODEX_HOME:-} ]]; then
     tab_env+=(--env "CODEX_HOME=${CODEX_HOME:A}")
+  elif [[ $agent == pi && $mode == write && -n ${PI_CODING_AGENT_DIR:-} ]]; then
+    tab_env+=(--env "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:A}")
   fi
   brief="$brief"$'\n\n'"$run_marker"
+  if [[ $agent == codex ]]; then
+    session_root=${CODEX_HOME:-$HOME/.codex}/sessions
+    session_glob='rollout-*.jsonl'
+  else
+    session_root=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/sessions/-${where//\//-}--
+    session_glob='*.jsonl'
+  fi
+  json_marker=$(jq -nc --arg marker "$run_marker" '$marker')
+  json_marker=${json_marker[2,-2]}
   typeset -F SECONDS
   deadline=$(( SECONDS + tmo ))
   brief_delivered=
@@ -807,7 +1005,7 @@ elif (( rc == 0 )); then
       call_herdr tab create --workspace "$workspace" --cwd "$where" --label "$tab_label" --no-focus "${tab_env[@]}"
       read_created_tab
       creating_tab=
-      if [[ -n $tab ]]; then write_aborted || abort_run 2; fi
+      if [[ -n $tab ]]; then write_running_record || abort_run 2; fi
     fi
   fi
   if [[ -n $tab && -z $pane ]]; then
@@ -839,7 +1037,9 @@ elif (( rc == 0 )); then
       if [[ -z $herdr_error ]] && (( remaining_ms > 0 )); then
         call_herdr pane wait-output "$pane" --regex "$exit_regex" --timeout "$remaining_ms"
       fi
-      if [[ $herdr_error == timeout ]] || { [[ -z $herdr_error ]] && (( remaining_ms <= 0 )); }; then
+      if [[ $herdr_error == STALLED ]]; then
+        rc=124; detail=STALLED
+      elif [[ $herdr_error == timeout ]] || { [[ -z $herdr_error ]] && (( remaining_ms <= 0 )); }; then
         rc=124
         call_herdr pane send-keys "$pane" ctrl+c
       elif [[ -n $herdr_error ]]; then
@@ -910,7 +1110,9 @@ elif (( rc == 0 )); then
       call_herdr agent prompt "$pane" "$brief" --wait --until done --until idle --until blocked --timeout "$remaining_ms"
       [[ -z $herdr_error ]] && brief_delivered=1
       agent_status=$(jq -r '.result.agent.agent_status // empty' "$response" 2>/dev/null)
-      if [[ $herdr_error == timeout ]]; then
+      if [[ $herdr_error == STALLED ]]; then
+        rc=124; detail=STALLED
+      elif [[ $herdr_error == timeout ]]; then
         rc=124; detail=NO_REPORT
       elif [[ $herdr_error == agent_blocked || $agent_status == blocked ]]; then
         rc=1; detail=AGENT_BLOCKED
@@ -925,7 +1127,7 @@ elif (( rc == 0 )); then
       fi
     fi
   fi
-  if [[ $mode == write && -n $pane ]] && (( rc == 124 || rc == 137 )); then
+  if [[ -n $pane ]] && { [[ -n $stalled ]] || { [[ $mode == write ]] && (( rc == 124 || rc == 137 )); }; }; then
     call_herdr pane send-keys "$pane" ctrl+c
     [[ -n $herdr_error ]] && detail="$detail HERDR_INTERRUPT_FAILED"
   fi
@@ -933,22 +1135,14 @@ elif (( rc == 0 )); then
   if [[ $mode == read ]]; then
     save_reader_report
     close_herdr_tab
-  elif (( rc == 124 || rc == 137 )) || [[ -z $resume && $rc != 0 && -z $brief_delivered ]]; then
+  elif [[ -z $stalled ]] && { (( rc == 124 || rc == 137 )) || [[ -z $resume && $rc != 0 && -z $brief_delivered ]]; }; then
     close_herdr_tab
   fi
   if [[ $agent == codex && -f $base.launch ]]; then
     detected_model=
-    session_age=(-newer "$base.launch")
-    [[ -z $resume ]] && session_age+=(-newerBm "$base.launch")
-    json_marker=$(jq -nc --arg marker "$run_marker" '$marker')
-    json_marker=${json_marker[2,-2]}
-    while IFS= read -r -d '' session; do
-      if marker_line=$(grep -Fn -m1 -e "\"$json_marker\"" -e "\\n$json_marker\"" -e "\\n$json_marker\\n" -e "\"$json_marker\\n" -- "$session") ||
-        marker_line=$(grep -Fnx -m1 -- "$run_marker" "$session"); then
-        detected_model=$(head -n "${marker_line%%:*}" "$session" | codex_turn_model)
-        [[ -n $detected_model ]] && break
-      fi
-    done < <(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name 'rollout-*.jsonl' "${session_age[@]}" -print0 2>/dev/null)
+    if [[ -n $transcript ]] || find_run_transcript; then
+      detected_model=$(head -n "$transcript_marker_line" "$transcript" | codex_turn_model)
+    fi
     if [[ -n $detected_model ]]; then real_model=$detected_model; else detail="$detail MODEL_UNVERIFIED"; fi
   fi
   rm -f -- "$base.launch" "$response"
@@ -969,13 +1163,12 @@ if [[ -n $scratch ]]; then
   rm -rf -- "$scratch" || { rc=1; detail="$detail TMP_CLEANUP_FAILED"; }
 fi
 if (( rc == 0 )) && [[ ! -s $out ]]; then rc=1; detail="$detail NO_REPORT"; fi
-secs=$(( $(date +%s) - st ))
 case $rc in
   0) outcome=pass ;;
   124|137) if [[ -z $pane_exited ]]; then outcome=timeout; else outcome=error; fi ;;
   *) outcome=error ;;
 esac
-note="via=$via mode=$mode where=$where"
+note="$note where=$where"
 [[ -n $detail ]] && note="$note ${detail# }"
 [[ -n $closed_idle ]] && note="$note$closed_idle"
 [[ -n $trust_accepted ]] && note="$note $trust_accepted"
@@ -1001,18 +1194,6 @@ if [[ -n $branch ]]; then
   if (( ${#sibling_removed} )); then outcome=error; note="$note SIBLING_REMOVED ${(j:,:)sibling_removed}"; fi
   (( ${#sibling_set_changed} )) && note="$note SIBLING_SET_CHANGED ${(j:,:)sibling_set_changed}"
 fi
-[[ -n $real_model && $real_model != $requested_model ]] && note="$note requested=$model"
-trap - INT TERM
-{ print -r -- "round=${round:t}"; print -r -- "repo=${repo_top:t}"
-  print -r -- "phase=$phase"; print -r -- "agent=$agent"; print -r -- "model=${real_model:-$model}"; print -r -- "effort=$effort"
-  print -r -- "launcher=$via"; print -r -- "secs=$secs"; print -r -- "exit=$rc"; print -r -- "outcome=$outcome"; print -r -- "note=$note"
-  [[ -n $branch ]] && print -r -- "branch=$branch"
-  if [[ -n $tab ]]; then
-    print -rl -- "access=$mode" "where=$where" "herdr_workspace=$workspace" "herdr_tab=$tab" "herdr_tab_label=$tab_label" \
-      "herdr_agent=$target" "herdr_started=$herdr_started"
-    [[ -n $pane ]] && print -r -- "herdr_pane=$pane"
-    if [[ $mode == write ]]; then print -r -- "herdr_source=$repo_top"; fi
-  fi
-  [[ -n $resume ]] && print -r -- "resumed_from=$resume"
-  [[ -n $herdr_closed ]] && print -r -- "herdr_closed=$herdr_closed"; } > $base.kv
-print -r -- "$label: $outcome rc=$rc ${secs}s model=${real_model:-$model} where=$where out=$out"
+[[ -n $stalled ]] && outcome=stalled
+[[ $real_model != "$requested_model" ]] && note="$note requested=$model"
+exit 0
