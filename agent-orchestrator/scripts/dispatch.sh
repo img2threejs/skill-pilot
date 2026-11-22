@@ -18,6 +18,7 @@ set -u
 zmodload zsh/zutil zsh/datetime
 skill_dir=${0:A:h:h}
 zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: || exit 2
+il=${o[--il]:-${HERDR_IL_PATH:-}}
 valid_label() {
   local LC_ALL=C
   [[ $1 == [A-Za-z0-9]* && $1 != *[^A-Za-z0-9._-]* ]]
@@ -60,6 +61,66 @@ audit_row() {
   "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
 }
 
+with_record_lock() (
+  local record=$1 handler=$2 lock_fd
+  shift 2
+  # Keep a stable lock inode and pass its descriptor to the writer across exec.
+  exec {lock_fd}>> "$record.lock" && flock -x "$lock_fd" && "$handler" "$record" "$@"
+  # Propagate the handler's status when called from the run's EXIT trap.
+  exit $?
+)
+
+append_record_fields() {
+  local record=$1
+  shift
+  print -rl -- "$@" >> "$record"
+}
+
+audit_record_pending() {
+  local recorded_outcome
+  [[ -f $1 && ! -L $1 && $(kv_value "$1" audited) != 1 ]] || return 1
+  recorded_outcome=$(kv_value "$1" outcome)
+  [[ -n $recorded_outcome && $recorded_outcome != running ]]
+}
+
+audit_record_locked() {
+  local record=$1 writer=$2 label=${1:t:r} ledger=${2:h}/runs.jsonl ledger_status
+  local -a fields
+  audit_record_pending "$record" || return 0
+  if [[ -e $ledger ]]; then
+    # A previous process can die after append but before marking the record.
+    jq -Ren --arg round "${round:t}" --arg label "$label" '
+      first(inputs | fromjson? | objects | select(.round == $round and .agent != "orchestrator" and
+        ((.label // "") == $label or ((.label // "") == "" and
+          ((.note // "") | startswith("label=" + $label + " ")))))) | true
+    ' "$ledger" >/dev/null
+    ledger_status=$?
+    case $ledger_status in
+      0) append_record_fields "$record" audited=1; return ;;
+      4) ;;
+      *) return 1 ;;
+    esac
+  fi
+  fields=("${(@f)$(<"$record")}")
+  audit_row "$writer" "${fields[@]}" && append_record_fields "$record" audited=1
+}
+
+audit_run_record() {
+  local record=$1 writer=$2
+  audit_record_pending "$record" || return 0
+  if ! with_record_lock "$record" audit_record_locked "$writer"; then
+    print -ru2 -- "${record:t:r}: AUDIT_PENDING"
+  fi
+}
+
+sweep_audit_records() {
+  local record writer
+  writer=$(audit_writer)
+  for record in "$round"/runs/*.kv(N); do
+    audit_run_record "$record" "$writer"
+  done
+}
+
 record_decision() {
   local round label=${o[--label]:-} verdict=${o[--verdict]:-}
   local references=${o[--of]:-} findings=${o[--findings]:-} accepted=${o[--accepted]:-}
@@ -91,7 +152,11 @@ record_decision() {
   esac
   for ref in "${(@s:,:)references}"; do
     valid_label "$ref" || { usage_error --of 'expected comma-separated run identifiers'; return 2; }
-    record=$round/runs/$ref.kv
+    records+=("$round/runs/$ref.kv")
+  done
+  sweep_audit_records
+  for record in "${records[@]}"; do
+    ref=${record:t:r}
     if [[ ! -f $record || -L $record || ! -w $record ]]; then
       print -ru2 -- "invalid or unwritable run record: $ref"
       return 2
@@ -100,14 +165,13 @@ record_decision() {
       print -ru2 -- "run still in progress: $ref"
       return 2
     fi
-    records+=("$record")
   done
   audit_row "$(audit_writer)" "round=${round:t}" "label=$label" "phase=adjudicate" "agent=orchestrator" \
     "model=$decision_model" "outcome=$verdict" "verdict=$verdict" "of=$references" \
     "secs=0" "exit=0" "verified_done=$verified" "findings=$findings" "findings_accepted=$accepted" \
     "note=label=$label of=$references verdict=$verdict${note:+ $note}" || return 1
   for record in "${records[@]}"; do
-    if ! print -rl -- "verified_done=$verified" "findings_accepted=$accepted" >> "$record"; then
+    if ! with_record_lock "$record" append_record_fields "verified_done=$verified" "findings_accepted=$accepted"; then
       print -ru2 -- "$label: decision logged, but could not update $record"
       return 1
     fi
@@ -170,7 +234,9 @@ if (( ${+o[--close]} )); then
   [[ -n ${o[--round]:-} ]] && valid_round "${o[--round]}" && valid_label "$label" && (( ${#o} == 2 )) || {
     echo "usage: dispatch.sh --round <round_dir> --close <label>" >&2; exit 2
   }
-  record=${o[--round]:a}/runs/$label.kv
+  round=${o[--round]:a}
+  sweep_audit_records
+  record=$round/runs/$label.kv
   if [[ -f $record && $(kv_value "$record" outcome) == running ]]; then
     print -ru2 -- "$label: run still in progress"
     exit 2
@@ -187,7 +253,7 @@ if (( ${+o[--close]} )); then
   [[ -n $recorded_pane ]] && pane_arg=("$recorded_pane")
   if result=$(close_dispatch_tab "$tab" "$(kv_value "$record" herdr_workspace)" \
     "$(kv_value "$record" herdr_tab_label)" "${pane_arg[@]}"); then
-    print -r -- 'herdr_closed=1' >> "$record" || exit 2
+    with_record_lock "$record" append_record_fields herdr_closed=1 || exit 2
     if [[ $result == 'tab already closed' ]]; then
       echo "$label: tab already closed"
     else
@@ -201,7 +267,6 @@ if (( ${+o[--close]} )); then
 fi
 for k in round label agent model access cwd brief phase; do [[ -n ${o[--$k]:-} ]] || { echo "missing --$k" >&2; exit 2; }; done
 round=${o[--round]:a} label=${o[--label]} agent=${o[--agent]} model=${o[--model]} effort=${o[--effort]:-medium}
-il=${o[--il]:-${HERDR_IL_PATH:-}}
 mode=${o[--access]} via=${o[--via]-herdr} cwd=${o[--cwd]:a} phase=${o[--phase]} tmo=${o[--timeout]:-1200}
 valid_round "${o[--round]}" || { usage_error --round 'expected a safe round directory name'; exit 2; }
 valid_label "$label" || { usage_error --label 'expected a safe identifier'; exit 2; }
@@ -231,6 +296,7 @@ fi
 [[ -f "${o[--brief]}" && -s "${o[--brief]}" ]] || { echo "missing or empty brief: ${o[--brief]}" >&2; exit 2; }
 brief="$(<"${o[--brief]}")"
 repo_top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || { echo "not a git work tree: $cwd" >&2; exit 2; }
+sweep_audit_records
 base=$round/runs/$label; log=$base.log; out=$base.out.md; record_tmp=$base.kv.$$
 [[ ! -e $base.kv ]] || { echo "label already used: $label" >&2; exit 2; }
 mkdir -p "$round/runs" || exit 2
@@ -439,28 +505,8 @@ finish_run() {
     note="$note ${detail:-SETUP_FAILED}$closed_idle"
   fi
   secs=$(( $(date +%s) - st ))
-  local writer audit_status
-  local -a record_lines
-  writer=$(audit_writer)
-  stage_run_record "$rc" || return 1
-  record_lines=("${(@f)$(<"$record_tmp")}")
-  publish_run_record || return 1
-  audit_row "$writer" "${record_lines[@]}"
-  audit_status=$?
-  if (( audit_status != 0 )); then
-    case $audit_status in
-      127) note="$note AUDIT_WRITER_MISSING" ;;
-      *) note="$note AUDIT_WRITE_FAILED" ;;
-    esac
-    # Preserve findings or tab state added to the completed record during the audit attempt.
-    local field
-    record_lines=()
-    while IFS= read -r field; do
-      [[ $field == note=* ]] && field="note=${note//[[:cntrl:]]/ }"
-      record_lines+=("$field")
-    done < "$base.kv"
-    print -rl -- "${record_lines[@]}" > "$record_tmp" && publish_run_record
-  fi
+  stage_run_record "$rc" && publish_run_record || return 1
+  audit_run_record "$base.kv" "$(audit_writer)"
   print -r -- "$label: $outcome${stalled:+ (STALLED)} rc=$rc ${secs}s model=$real_model where=$where out=$out"
 }
 
@@ -974,7 +1020,7 @@ elif (( rc == 0 )); then
         fi
         if close_dispatch_tab "$id" "$writer_ws" "$writer_label" "$writer_pane" >> "$log"; then
           (( --idle_count ))
-          print -r -- 'herdr_closed=1' >> "$record"
+          with_record_lock "$record" append_record_fields herdr_closed=1
           closed_idle="$closed_idle CLOSED_IDLE $writer_label"
         fi
       done
