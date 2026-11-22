@@ -8,6 +8,10 @@
 #   Starts herdr if needed, ensures the project's workspace (label defaults to the project
 #   root's basename), prints {home, tabs} JSON, and with --focus switches herdr to it.
 # dispatch.sh --round <round_dir> --close <label>
+# dispatch.sh --round <round_dir> --cleanup
+#   After the round's work is merged or pushed: closes writer tabs, moves each writer worktree's .omc
+#   evidence to <round>/evidence/<label>.omc, removes the worktree and its agent/<label> branch, and removes
+#   clean detached *-rv-* review checkouts used by the round. Keeps anything dirty, running or unpushed.
 # dispatch.sh --decide --round <round_dir> --label <label> --of <labels> --verdict <verdict>
 #             --findings <n> --accepted <n> [--note <text>]
 # Herdr launches require --il or HERDR_IL_PATH. Missing both gives HERDR_IL_REQUIRED (exit 2).
@@ -20,7 +24,7 @@
 set -u
 zmodload zsh/zutil zsh/datetime
 skill_dir=${0:A:h:h}
-zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: -home -focus -keep-tmp || exit 2
+zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: -home -focus -cleanup -keep-tmp || exit 2
 keep_tmp=${+o[--keep-tmp]}
 il=${o[--il]:-${HERDR_IL_PATH:-}}
 valid_label() {
@@ -283,6 +287,57 @@ if (( ${+o[--close]} )); then
     exit 1
   fi
   exit 0
+fi
+if (( ${+o[--cleanup]} )); then
+  [[ -n ${o[--round]:-} ]] && valid_round "${o[--round]}" && (( ${#o} == 2 )) || {
+    echo "usage: dispatch.sh --round <round_dir> --cleanup" >&2; exit 2
+  }
+  round=${o[--round]:a} label=cleanup
+  sweep_audit_records
+  records=($round/runs/*.kv(N))
+  for record in $records; do
+    [[ $(kv_value "$record" outcome) == running ]] && { echo "cleanup refused: $(kv_value "$record" label) is still running" >&2; exit 2; }
+  done
+  typeset -A seen
+  kept=0
+  for record in $records; do
+    run=${record:t:r} where=$(kv_value "$record" where) mode=$(kv_value "$record" mode)
+    [[ -n $where ]] || where=$(kv_value "$record" note | sed -n 's/.* where=\([^ ]*\).*/\1/p')
+    [[ -n $mode ]] || mode=$(kv_value "$record" note | sed -n 's/.* mode=\([a-z]*\).*/\1/p')
+    [[ -n $where && -z ${seen[$where]:-} ]] || continue
+    seen[$where]=1
+    if [[ $mode == write && -n $(kv_value "$record" herdr_tab) && $(kv_value "$record" herdr_closed) != 1 ]]; then
+      "$0" --round "$round" --close "$run" >/dev/null 2>&1 || true
+    fi
+    [[ -d $where ]] || continue
+    if [[ $mode == write && ${where:t} == *-wt-* ]]; then
+      branch=$(git -C "$where" symbolic-ref -q --short HEAD) || { echo "kept $where: detached"; (( ++kept )); continue; }
+      [[ $branch == agent/* ]] || { echo "kept $where: branch $branch is not an agent branch"; (( ++kept )); continue; }
+    elif [[ $mode == read && ${where:t} == *-rv-* ]]; then
+      git -C "$where" symbolic-ref -q HEAD >/dev/null && { echo "kept $where: not detached"; (( ++kept )); continue; }
+      branch=
+    else
+      continue
+    fi
+    if [[ -n $(git -C "$where" status --porcelain --untracked-files=all | grep -v '^?? \.omc/' | grep -v '^?? node_modules$' | grep -v '^?? AGENT_REPORT\.md$') ]]; then
+      echo "kept $where: uncommitted changes"; (( ++kept )); continue
+    fi
+    if [[ -n $branch ]] && ! git -C "$where" branch -a --contains HEAD --format='%(refname)' | grep -qv "^refs/heads/$branch\$"; then
+      echo "kept $where: $branch is not contained in any other branch (unpushed or unmerged)"; (( ++kept )); continue
+    fi
+    main_repo=${$(git -C "$where" rev-parse --path-format=absolute --git-common-dir):h}
+    if [[ -d $where/.omc ]]; then
+      mkdir -p "$round/evidence" && mv "$where/.omc" "$round/evidence/$run.omc" ||
+        { echo "kept $where: could not move .omc evidence"; (( ++kept )); continue; }
+    fi
+    [[ -f $where/AGENT_REPORT.md ]] && mkdir -p "$round/evidence" && mv "$where/AGENT_REPORT.md" "$round/evidence/$run.AGENT_REPORT.md"
+    [[ -L $where/node_modules ]] && rm "$where/node_modules"
+    git -C "$main_repo" worktree remove --force "$where" || { echo "kept $where: worktree remove failed"; (( ++kept )); continue; }
+    [[ -z $branch ]] || git -C "$main_repo" branch -D "$branch" >/dev/null
+    echo "removed $where${branch:+ and $branch}"
+    with_record_lock "$record" append_record_fields cleaned=1 || true
+  done
+  exit $(( kept > 0 ? 3 : 0 ))
 fi
 home_mode=${+o[--home]}
 if (( home_mode )); then

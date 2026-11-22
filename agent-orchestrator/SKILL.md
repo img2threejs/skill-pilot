@@ -256,6 +256,11 @@ product decision is unclear; do not let an agent guess it.
    `$R/decision.md` only after the real test and validation pass.
 9. **Close**: aside from the local review commit in step 5, code repo commits, pushes, PRs and merges require
    the owner's approval. Follow the project's commit attribution policy.
+   **Clean up when the task is done** (owner, 2026-11-22): once the round's work is merged or pushed, run
+   `"$D" --round "$R" --cleanup`. It closes writer tabs, moves each writer worktree's `.omc` evidence and
+   `AGENT_REPORT.md` to `$R/evidence/`, removes the worktree and its `agent/<label>` branch, and removes the clean
+   detached `*-rv-*` review checkouts the round used. It keeps, and lists, anything still running, dirty,
+   unpushed or unmerged (exit 3), so fix or push those and run it again. Never delete a worktree by hand.
    When a writer batch is accepted, run `$D --round $R --close <label>` for each writer. Closing an already
    closed tab reports a no-op. After the round closes (`MERGE` or abandonment), close any remaining recorded
    run tabs and keep the skill-owned home workspace for future rounds. Remove the `<il>/<repo>-rv-<label>` review
