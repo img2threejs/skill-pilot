@@ -61,11 +61,15 @@ audit_row() {
   timeout -k 1 2 "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
 }
 
+acquire_record_lock() {
+  # Keep the descriptor open in the caller until it finishes writing.
+  exec {lock_fd}>> "$1.lock" && flock -x -w 2 -E 75 "$lock_fd"
+}
+
 with_record_lock() (
   local record=$1 handler=$2 lock_fd
   shift 2
-  # Keep a stable lock inode and pass its descriptor to the writer across exec.
-  exec {lock_fd}>> "$record.lock" && flock -x -w 2 "$lock_fd" && "$handler" "$record" "$@"
+  acquire_record_lock "$record" && "$handler" "$record" "$@"
   # Propagate the handler's status when called from the run's EXIT trap.
   exit $?
 )
@@ -154,28 +158,38 @@ record_decision() {
     valid_label "$ref" || { usage_error --of 'expected comma-separated run identifiers'; return 2; }
     records+=("$round/runs/$ref.kv")
   done
+  (
+    local lock_fd
+    # All decisions acquire shared record locks in the same order.
+    for record in "${(@o)records}"; do
+      ref=${record:t:r}
+      if [[ ! -f $record || -L $record || ! -w $record ]]; then
+        print -ru2 -- "invalid or unwritable run record: $ref"
+        exit 2
+      fi
+      acquire_record_lock "$record"
+      case $? in
+        0) ;;
+        75) print -ru2 -- "$label: DECIDE_LOCK_TIMEOUT: $ref"; exit 1 ;;
+        *) print -ru2 -- "$label: DECIDE_LOCK_FAILED: $ref"; exit 1 ;;
+      esac
+      if [[ $(kv_value "$record" outcome) == running ]]; then
+        print -ru2 -- "run still in progress: $ref"
+        exit 2
+      fi
+    done
+    for record in "${records[@]}"; do
+      if ! append_record_fields "$record" "verified_done=$verified" "findings_accepted=$accepted"; then
+        print -ru2 -- "$label: could not update $record"
+        exit 1
+      fi
+    done
+    audit_row "$(audit_writer)" "round=${round:t}" "label=$label" "phase=adjudicate" "agent=orchestrator" \
+      "model=$decision_model" "outcome=$verdict" "verdict=$verdict" "of=$references" \
+      "secs=0" "exit=0" "verified_done=$verified" "findings=$findings" "findings_accepted=$accepted" \
+      "note=label=$label of=$references verdict=$verdict${note:+ $note}"
+  ) || return $?
   sweep_audit_records
-  for record in "${records[@]}"; do
-    ref=${record:t:r}
-    if [[ ! -f $record || -L $record || ! -w $record ]]; then
-      print -ru2 -- "invalid or unwritable run record: $ref"
-      return 2
-    fi
-    if [[ $(kv_value "$record" outcome) == running ]]; then
-      print -ru2 -- "run still in progress: $ref"
-      return 2
-    fi
-  done
-  audit_row "$(audit_writer)" "round=${round:t}" "label=$label" "phase=adjudicate" "agent=orchestrator" \
-    "model=$decision_model" "outcome=$verdict" "verdict=$verdict" "of=$references" \
-    "secs=0" "exit=0" "verified_done=$verified" "findings=$findings" "findings_accepted=$accepted" \
-    "note=label=$label of=$references verdict=$verdict${note:+ $note}" || return 1
-  for record in "${records[@]}"; do
-    if ! with_record_lock "$record" append_record_fields "verified_done=$verified" "findings_accepted=$accepted"; then
-      print -ru2 -- "$label: decision logged, but could not update $record"
-      return 1
-    fi
-  done
   print -r -- "$label: $verdict"
 }
 
