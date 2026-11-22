@@ -298,8 +298,12 @@ if (( ${+o[--cleanup]} )); then
   for record in $records; do
     [[ $(kv_value "$record" outcome) == running ]] && { echo "cleanup refused: $(kv_value "$record" label) is still running" >&2; exit 2; }
   done
-  typeset -A seen
+  typeset -A seen busy
   kept=0
+  # A checkout may be shared with another round; never remove one a running record uses.
+  for other in ${round:h}/*/runs/*.kv(N); do
+    [[ $(kv_value "$other" outcome) == running ]] && busy[$(kv_value "$other" where)]=1
+  done
   for record in $records; do
     run=${record:t:r} where=$(kv_value "$record" where) mode=$(kv_value "$record" mode)
     [[ -n $where ]] || where=$(kv_value "$record" note | sed -n 's/.* where=\([^ ]*\).*/\1/p')
@@ -310,6 +314,7 @@ if (( ${+o[--cleanup]} )); then
       "$0" --round "$round" --close "$run" >/dev/null 2>&1 || true
     fi
     [[ -d $where ]] || continue
+    [[ -z ${busy[$where]:-} ]] || { echo "kept $where: in use by a running record"; (( ++kept )); continue; }
     if [[ $mode == write && ${where:t} == *-wt-* ]]; then
       branch=$(git -C "$where" symbolic-ref -q --short HEAD) || { echo "kept $where: detached"; (( ++kept )); continue; }
       [[ $branch == agent/* ]] || { echo "kept $where: branch $branch is not an agent branch"; (( ++kept )); continue; }
@@ -319,10 +324,18 @@ if (( ${+o[--cleanup]} )); then
     else
       continue
     fi
-    if [[ -n $(git -C "$where" status --porcelain --untracked-files=all | grep -v '^?? \.omc/' | grep -v '^?? node_modules$' | grep -v '^?? AGENT_REPORT\.md$') ]]; then
+    if [[ -n $(git -C "$where" status --porcelain --untracked-files=no) ]]; then
       echo "kept $where: uncommitted changes"; (( ++kept )); continue
     fi
-    if [[ -n $branch ]] && ! git -C "$where" branch -a --contains HEAD --format='%(refname)' | grep -qv "^refs/heads/$branch\$"; then
+    landed=
+    if [[ -z $branch ]] || git -C "$where" branch -a --contains HEAD --format='%(refname)' | grep -qv "^refs/heads/$branch\$"; then
+      landed=1
+    else
+      for ref in ${(f)"$(git -C "$where" for-each-ref --format='%(refname:short)' refs/heads refs/remotes | grep -v '^agent/')"}; do
+        [[ -n $ref ]] && ! git -C "$where" cherry "$ref" HEAD 2>/dev/null | grep -q '^+' && { landed=1; break; }
+      done
+    fi
+    if [[ -z $landed ]]; then
       echo "kept $where: $branch is not contained in any other branch (unpushed or unmerged)"; (( ++kept )); continue
     fi
     main_repo=${$(git -C "$where" rev-parse --path-format=absolute --git-common-dir):h}
@@ -331,6 +344,12 @@ if (( ${+o[--cleanup]} )); then
         { echo "kept $where: could not move .omc evidence"; (( ++kept )); continue; }
     fi
     [[ -f $where/AGENT_REPORT.md ]] && mkdir -p "$round/evidence" && mv "$where/AGENT_REPORT.md" "$round/evidence/$run.AGENT_REPORT.md"
+    [[ -L $where/node_modules ]] && rm "$where/node_modules"
+    extra=(${(f)"$(git -C "$where" ls-files --others --exclude-standard)"})
+    if (( ${#extra} )); then
+      mkdir -p "$round/evidence/$run.untracked" && (cd "$where" && print -rl -- $extra | cpio -pdm --quiet "$round/evidence/$run.untracked") ||
+        { echo "kept $where: could not preserve untracked files"; (( ++kept )); continue; }
+    fi
     [[ -L $where/node_modules ]] && rm "$where/node_modules"
     git -C "$main_repo" worktree remove --force "$where" || { echo "kept $where: worktree remove failed"; (( ++kept )); continue; }
     [[ -z $branch ]] || git -C "$main_repo" branch -D "$branch" >/dev/null

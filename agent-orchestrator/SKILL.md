@@ -258,8 +258,10 @@ product decision is unclear; do not let an agent guess it.
    the owner's approval. Follow the project's commit attribution policy.
    **Clean up when the task is done** (owner, 2026-11-22): once the round's work is merged or pushed, run
    `"$D" --round "$R" --cleanup`. It closes writer tabs, moves each writer worktree's `.omc` evidence and
-   `AGENT_REPORT.md` to `$R/evidence/`, removes the worktree and its `agent/<label>` branch, and removes the clean
-   detached `*-rv-*` review checkouts the round used. It keeps, and lists, anything still running, dirty,
+   `AGENT_REPORT.md` and any untracked files to `$R/evidence/`, removes the worktree and its `agent/<label>` branch, and removes the clean
+   detached `*-rv-*` review checkouts the round used. A branch counts as landed when another branch contains it
+   or every commit is patch-equivalent (cherry-picked or rebased). It keeps, and lists, anything still running
+   (in any round sharing that checkout), with tracked changes,
    unpushed or unmerged (exit 3), so fix or push those and run it again. Never delete a worktree by hand.
    When a writer batch is accepted, run `$D --round $R --close <label>` for each writer. Closing an already
    closed tab reports a no-op. After the round closes (`MERGE` or abandonment), close any remaining recorded
