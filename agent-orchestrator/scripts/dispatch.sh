@@ -19,7 +19,22 @@ zmodload zsh/zutil zsh/datetime
 skill_dir=${0:A:h:h}
 zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: || exit 2
 valid_label() {
-  [[ -n $1 && $1 != */* && $1 != *$'\n'* && $1 != . && $1 != .. ]]
+  local LC_ALL=C
+  [[ $1 == [A-Za-z0-9]* && $1 != *[^A-Za-z0-9._-]* ]]
+}
+
+valid_model() {
+  local LC_ALL=C
+  [[ $1 == [A-Za-z0-9]* && $1 != *[^A-Za-z0-9._:/-]* ]]
+}
+
+valid_round() {
+  [[ $1 != *[[:cntrl:]]* ]] && valid_label "${1:a:t}"
+}
+
+usage_error() {
+  print -ru2 -- "invalid $1: $2"
+  return 2
 }
 
 kv_value() {
@@ -48,7 +63,7 @@ audit_row() {
 record_decision() {
   local round label=${o[--label]:-} verdict=${o[--verdict]:-}
   local references=${o[--of]:-} findings=${o[--findings]:-} accepted=${o[--accepted]:-}
-  local note=${o[--note]:-} verified record ref key
+  local note=${o[--note]:-} decision_model=${DISPATCH_ORCHESTRATOR_MODEL:-unknown} verified record ref key
   local -Ua records
   for key in "${(@k)o}"; do
     case $key in
@@ -56,20 +71,28 @@ record_decision() {
       *) print -ru2 -- "unexpected decision option: $key"; return 2 ;;
     esac
   done
-  if (( $# )) || [[ -z ${o[--round]:-} || -z $references ]] || ! valid_label "$label" ||
+  if (( $# )) || [[ -z ${o[--round]:-} || -z $references ]] ||
      [[ $findings != <-> || $accepted != <-> ]] || (( accepted > findings )); then
     print -ru2 -- 'usage: dispatch.sh --decide --round <round_dir> --label <label> --of <labels> --verdict merge|send-back|accept|reject --findings N --accepted N [--note text]'
     return 2
   fi
   round=${o[--round]:a}
+  valid_round "${o[--round]}" || { usage_error --round 'expected a safe round directory name'; return 2; }
+  valid_label "$label" || { usage_error --label 'expected a safe identifier'; return 2; }
+  valid_model "$decision_model" || { usage_error DISPATCH_ORCHESTRATOR_MODEL 'expected a safe model identifier'; return 2; }
+  if [[ $note == *[[:cntrl:]]* || $note =~ '^[[:space:]]*=' ]]; then
+    usage_error --note 'expected plain single-line text without a leading equals sign'
+    return 2
+  fi
   case $verdict in
     merge|accept) verified=true ;;
     send-back|reject) verified=false ;;
-    *) print -ru2 -- "invalid --verdict: $verdict"; return 2 ;;
+    *) usage_error --verdict "expected merge, send-back, accept or reject"; return 2 ;;
   esac
   for ref in "${(@s:,:)references}"; do
+    valid_label "$ref" || { usage_error --of 'expected comma-separated run identifiers'; return 2; }
     record=$round/runs/$ref.kv
-    if ! valid_label "$ref" || [[ ! -f $record || -L $record || ! -w $record ]]; then
+    if [[ ! -f $record || -L $record || ! -w $record ]]; then
       print -ru2 -- "invalid or unwritable run record: $ref"
       return 2
     fi
@@ -79,9 +102,8 @@ record_decision() {
     fi
     records+=("$record")
   done
-  note=${note//$'\n'/ }
   audit_row "$(audit_writer)" "round=${round:t}" "label=$label" "phase=adjudicate" "agent=orchestrator" \
-    "model=${DISPATCH_ORCHESTRATOR_MODEL:-unknown}" "outcome=$verdict" "verdict=$verdict" "of=$references" \
+    "model=$decision_model" "outcome=$verdict" "verdict=$verdict" "of=$references" \
     "secs=0" "exit=0" "verified_done=$verified" "findings=$findings" "findings_accepted=$accepted" \
     "note=label=$label of=$references verdict=$verdict${note:+ $note}" || return 1
   for record in "${records[@]}"; do
@@ -145,7 +167,7 @@ close_dispatch_tab() {
 
 if (( ${+o[--close]} )); then
   label=${o[--close]}
-  [[ -n ${o[--round]:-} ]] && valid_label "$label" && (( ${#o} == 2 )) || {
+  [[ -n ${o[--round]:-} ]] && valid_round "${o[--round]}" && valid_label "$label" && (( ${#o} == 2 )) || {
     echo "usage: dispatch.sh --round <round_dir> --close <label>" >&2; exit 2
   }
   record=${o[--round]:a}/runs/$label.kv
@@ -181,10 +203,19 @@ for k in round label agent model access cwd brief phase; do [[ -n ${o[--$k]:-} ]
 round=${o[--round]:a} label=${o[--label]} agent=${o[--agent]} model=${o[--model]} effort=${o[--effort]:-medium}
 il=${o[--il]:-${HERDR_IL_PATH:-}}
 mode=${o[--access]} via=${o[--via]-herdr} cwd=${o[--cwd]:a} phase=${o[--phase]} tmo=${o[--timeout]:-1200}
-valid_label "$label" || { echo "invalid --label: $label" >&2; exit 2; }
-case $agent in codex|pi) ;; *) echo "invalid --agent: $agent" >&2; exit 2 ;; esac
-case $mode in read|write) ;; *) echo "invalid --access: $mode" >&2; exit 2 ;; esac
-case $via in exec|herdr) ;; *) echo "invalid --via: $via" >&2; exit 2 ;; esac
+valid_round "${o[--round]}" || { usage_error --round 'expected a safe round directory name'; exit 2; }
+valid_label "$label" || { usage_error --label 'expected a safe identifier'; exit 2; }
+valid_label "$phase" || { usage_error --phase 'expected a safe identifier'; exit 2; }
+valid_label "$effort" || { usage_error --effort 'expected a safe identifier'; exit 2; }
+valid_model "$model" || { usage_error --model 'expected a safe model identifier'; exit 2; }
+if (( ${+o[--resume]} )) && ! valid_label "${o[--resume]}"; then
+  usage_error --resume 'expected a safe run identifier'
+  exit 2
+fi
+[[ ${o[--cwd]} != *[[:cntrl:]]* && ${cwd:A} != *[[:cntrl:]]* ]] || { usage_error --cwd 'expected a path without control characters'; exit 2; }
+case $agent in codex|pi) ;; *) usage_error --agent 'expected codex or pi'; exit 2 ;; esac
+case $mode in read|write) ;; *) usage_error --access 'expected read or write'; exit 2 ;; esac
+case $via in exec|herdr) ;; *) usage_error --via 'expected exec or herdr'; exit 2 ;; esac
 if [[ $via == herdr ]]; then
   stall_min=${o[--stall]:-${DISPATCH_STALL_MIN:-8}}
   if [[ $stall_min != <-> && $stall_min != <->.<-> ]] || (( stall_min <= 0 )); then
@@ -194,6 +225,8 @@ if [[ $via == herdr ]]; then
   stall_secs=$(( stall_min * 60.0 ))
   stall_poll=$(( stall_secs < 4 ? stall_secs / 4 : 1.0 ))
   [[ -n $il ]] || { print -ru2 -- "$label: HERDR_IL_REQUIRED: pass --il <project_root> or set HERDR_IL_PATH"; exit 2; }
+  [[ $il != *[[:cntrl:]]* && ${il:A} != *[[:cntrl:]]* ]] ||
+    { usage_error --il 'expected a path without control characters'; exit 2; }
 fi
 [[ -f "${o[--brief]}" && -s "${o[--brief]}" ]] || { echo "missing or empty brief: ${o[--brief]}" >&2; exit 2; }
 brief="$(<"${o[--brief]}")"
@@ -369,22 +402,21 @@ snapshot_siblings() {
 }
 
 stage_run_record() {
-  {
-    print -rl -- "round=${round:t}" "repo=${repo_top:t}" "label=$label" "phase=$phase" "agent=$agent" \
-      "model=$real_model" "effort=$effort" "launcher=$via" "access=$mode" "where=$where" \
-      "secs=$secs" "exit=$1" "outcome=$outcome" "note=$note"
-    [[ $outcome == stalled ]] && print -r -- "code=STALLED"
-    [[ -n $branch ]] && print -r -- "branch=$branch"
-    if [[ -n $tab ]]; then
-      print -rl -- "herdr_workspace=$workspace" "herdr_tab=$tab" "herdr_tab_label=$tab_label" \
-        "herdr_agent=$target" "herdr_started=$herdr_started"
-      [[ -n $pane ]] && print -r -- "herdr_pane=$pane"
-      if [[ $mode == write ]]; then print -r -- "herdr_source=$repo_top"; fi
-    fi
-    [[ -n $resume ]] && print -r -- "resumed_from=$resume"
-    [[ -n $herdr_closed ]] && print -r -- "herdr_closed=$herdr_closed"
-    true
-  } > "$record_tmp"
+  local -a fields=("round=${round:t}" "repo=${repo_top:t}" "label=$label" "phase=$phase" "agent=$agent"
+    "model=$real_model" "effort=$effort" "launcher=$via" "access=$mode" "where=$where"
+    "secs=$secs" "exit=$1" "outcome=$outcome" "note=$note")
+  [[ -n $stalled ]] && fields+=("code=STALLED")
+  [[ -n $branch ]] && fields+=("branch=$branch")
+  if [[ -n $tab ]]; then
+    fields+=("herdr_workspace=$workspace" "herdr_tab=$tab" "herdr_tab_label=$tab_label"
+      "herdr_agent=$target" "herdr_started=$herdr_started")
+    [[ -n $pane ]] && fields+=("herdr_pane=$pane")
+    [[ $mode == write ]] && fields+=("herdr_source=$repo_top")
+  fi
+  [[ -n $resume ]] && fields+=("resumed_from=$resume")
+  [[ -n $herdr_closed ]] && fields+=("herdr_closed=$herdr_closed")
+  # Tool responses and filesystem-derived diagnostics are also confined to one record line.
+  print -rl -- "${(@)fields//[[:cntrl:]]/ }" > "$record_tmp"
 }
 
 publish_run_record() {
@@ -412,6 +444,7 @@ finish_run() {
   writer=$(audit_writer)
   stage_run_record "$rc" || return 1
   record_lines=("${(@f)$(<"$record_tmp")}")
+  publish_run_record || return 1
   audit_row "$writer" "${record_lines[@]}"
   audit_status=$?
   if (( audit_status != 0 )); then
@@ -419,9 +452,15 @@ finish_run() {
       127) note="$note AUDIT_WRITER_MISSING" ;;
       *) note="$note AUDIT_WRITE_FAILED" ;;
     esac
-    stage_run_record "$rc" || return 1
+    # Preserve findings or tab state added to the completed record during the audit attempt.
+    local field
+    record_lines=()
+    while IFS= read -r field; do
+      [[ $field == note=* ]] && field="note=${note//[[:cntrl:]]/ }"
+      record_lines+=("$field")
+    done < "$base.kv"
+    print -rl -- "${record_lines[@]}" > "$record_tmp" && publish_run_record
   fi
-  publish_run_record || return 1
   print -r -- "$label: $outcome${stalled:+ (STALLED)} rc=$rc ${secs}s model=$real_model where=$where out=$out"
 }
 
@@ -775,7 +814,6 @@ write_running_record || exit 2
 if (( ${+o[--resume]} )); then
   [[ $mode == write ]] || refuse_resume read_access
   [[ $via == herdr ]] || refuse_resume not_herdr
-  valid_label "$resume" || refuse_resume invalid_label
   record=$round/runs/$resume.kv
   [[ -f $record ]] || refuse_resume run_not_found
   [[ $(kv_value "$record" outcome) != running ]] || refuse_resume run_in_progress
@@ -883,7 +921,7 @@ if [[ $via == exec ]]; then
              run_pid=$!
              wait "$run_pid"; rc=$? run_pid=
              detected_model=$(grep -m1 '^model:' $log | awk '{print $2}')
-             if [[ -n $detected_model ]]; then real_model=$detected_model; else detail=MODEL_UNVERIFIED; fi
+             if valid_model "$detected_model"; then real_model=$detected_model; else detail=MODEL_UNVERIFIED; fi
            else
              rc=1; detail=CODEX_MCP_LIST_FAILED:$mcp_failure
            fi ;;
@@ -1143,7 +1181,7 @@ elif (( rc == 0 )); then
     if [[ -n $transcript ]] || find_run_transcript; then
       detected_model=$(head -n "$transcript_marker_line" "$transcript" | codex_turn_model)
     fi
-    if [[ -n $detected_model ]]; then real_model=$detected_model; else detail="$detail MODEL_UNVERIFIED"; fi
+    if valid_model "$detected_model"; then real_model=$detected_model; else detail="$detail MODEL_UNVERIFIED"; fi
   fi
   rm -f -- "$base.launch" "$response"
   if [[ $mode == write ]]; then
@@ -1194,6 +1232,6 @@ if [[ -n $branch ]]; then
   if (( ${#sibling_removed} )); then outcome=error; note="$note SIBLING_REMOVED ${(j:,:)sibling_removed}"; fi
   (( ${#sibling_set_changed} )) && note="$note SIBLING_SET_CHANGED ${(j:,:)sibling_set_changed}"
 fi
-[[ -n $stalled ]] && outcome=stalled
+[[ -n $stalled && $outcome != error ]] && outcome=stalled
 [[ $real_model != "$requested_model" ]] && note="$note requested=$model"
 exit 0
