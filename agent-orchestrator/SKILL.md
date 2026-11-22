@@ -112,7 +112,8 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   Dispatch tracks mtime and size of the Codex rollout matched to the run marker, the pi reader's events
   stream, or the pi writer's session matched to the run marker. Until a transcript is available, it hashes
   recent content from the run's own pane. Herdr agent status and workspace activity do not reset the interval.
-  Dispatch prints and logs `outcome=stalled` with `STALLED` and sends Ctrl+C. Readers preserve any saved
+  Dispatch records `STALLED` and sends Ctrl+C. It reports `outcome=stalled` when integrity checks pass
+  and retains `outcome=error` if an integrity check fails. Readers preserve any saved
   text as `PARTIAL_REPORT` and close their tab. Writers keep their tab for `--resume`.
 - Reviewers always use fresh sessions, including self review.
   Readers save any available report to `runs/<label>.out.md`, capture their pane and close their tab on exit.
@@ -217,9 +218,13 @@ product decision is unclear; do not let an agent guess it.
 
 ## Audit
 
-Dispatch writes one audit row at exit with the final fields from `runs/<label>.kv`, including for aborted
-and stalled runs. Use that row directly. If the writer is unavailable, dispatch prints `AUDIT_WRITER_MISSING`
-and includes it in the run note while preserving the run's outcome.
+At exit, dispatch publishes the final `runs/<label>.kv` and then appends one audit row with those fields,
+including for aborted and stalled runs. If the writer is unavailable or the append fails, dispatch prints
+`AUDIT_WRITER_MISSING` or `AUDIT_WRITE_FAILED` and updates the run note while preserving the run's outcome.
+
+Run labels, phases and round directory names start with an ASCII letter or digit and may also contain
+periods, underscores and hyphens. Model identifiers additionally allow slashes and colons. Decision notes
+may include spaces and punctuation on one line, with no control characters or leading equals sign.
 
 Never act on a `.kv` whose outcome is `running`. Wait for the final outcome before making a verdict,
 resuming the run, or closing its tab or worktree.
