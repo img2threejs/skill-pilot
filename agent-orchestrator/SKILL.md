@@ -36,6 +36,8 @@ error and mark the round BLOCKED; never fall through to an undeclared agent.
 Every agent run goes through `scripts/dispatch.sh` relative to the directory containing this file.
 Never launch or prompt agents by hand with `herdr agent start` or `herdr agent prompt`. Hand launches produce no audit row.
 Set `SKILL_DIR` to that directory and `PROJECT_ROOT` to the directory containing your checkouts for the examples below.
+`PROJECT_ROOT` is the project you are working on, not wherever `HERDR_IL_PATH` points. The environment may set
+`HERDR_IL_PATH` to another project, such as img2threejs-org. Always pass `--il "$PROJECT_ROOT"` explicitly.
 herdr is the default for writers and readers.
 On `HERDR_NOT_RUNNING`, the orchestrator starts the server itself without stealing focus:
 `tmux has-session -t herdr-host || tmux new -d -s herdr-host herdr`. The owner watches by running `herdr` in any
@@ -80,7 +82,12 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   reports `HERDR_HOME_TIMEOUT`. Dispatch keeps the per-project marker until it saves a valid create receipt.
   If the marker remains, a retry reports `HERDR_HOME_CREATE_UNCERTAIN` and logs the marker path.
   Check Herdr and resolve any unrecorded workspace before clearing the marker and retrying.
-  The creation label comes from `--herdr-home <label>`, then `DISPATCH_HERDR_HOME`, and defaults to `img2`.
+  The creation label comes from `--herdr-home <label>`, then `DISPATCH_HERDR_HOME`, and defaults to the project
+  root's basename. Existing entries in the state file keep their recorded label, so img2threejs-org stays `img2`.
+- Check and open a project's workspace with `"$D" --home --il "$PROJECT_ROOT" [--focus]`. This starts the herdr
+  server in tmux `herdr-host` if it is down, then reuses or creates the workspace. It prints `{home, tabs}` JSON
+  with each tab's `agent_status`, and with `--focus` switches herdr to that workspace. Run it at round start and
+  whenever the owner asks where the agents are.
   When testing from a source checkout, point `DISPATCH_HERDR_STATE_DIR` to a state directory outside Git.
   Dispatch leaves unrelated workspaces and tabs alone. It only reads terminal output,
   sends input to, or closes the tabs and panes it created and tracks for the round.
@@ -115,6 +122,9 @@ D="$SKILL_DIR/scripts/dispatch.sh"
   Dispatch records `STALLED` and sends Ctrl+C. It reports `outcome=stalled` when integrity checks pass
   and retains `outcome=error` if an integrity check fails. Readers preserve any saved
   text as `PARTIAL_REPORT` and close their tab. Writers keep their tab for `--resume`.
+- Dispatch deletes a reader's scratch (`runs/<label>.tmp`) when the run ends. Pass `--keep-tmp` when the deliverable
+  is files, such as QA run files or screenshots, and dispatch moves the scratch to `runs/<label>.kept` instead.
+  Measured 2026-11-22: without the flag, three QA lanes lost all their evidence after reporting gate OK.
 - Reviewers always use fresh sessions, including self review.
   Readers save any available report to `runs/<label>.out.md`, capture their pane and close their tab on exit.
   A timeout, execution error or interrupt with saved reader text records `PARTIAL_REPORT`. Dispatch sends Ctrl+C
@@ -157,6 +167,15 @@ D="$SKILL_DIR/scripts/dispatch.sh"
 
 ## Round setup
 
+0. Set `PROJECT_ROOT` to the project's own root, then run `"$D" --home --il "$PROJECT_ROOT" --focus`. If
+   `$PROJECT_ROOT/agent-audit/` does not exist, create it as its own local git repo:
+   - Symlink `log-run.sh` and `scorecard.sh` from an existing `agent-audit/`, for example img2threejs-org's.
+     The writer appends to the `runs.jsonl` next to the symlink, so each project keeps its own audit log.
+   - Add an empty `lessons.md`.
+
+   Herdr runs need `--cwd` to be a git work tree inside `PROJECT_ROOT`. For a pi reader that needs no repository,
+   use an empty git repository in the round, such as `$R/qa-cwd` created with `git init`. A checkout that contains
+   `.agents/` makes pi try to write `~/.pi/agent/trust.json.lock`, which the read sandbox denies (`EPERM`, measured).
 1. Confirm the target repo inside the project root. Read its `AGENTS.md` /
    `CLAUDE.md` and any `reviewer-style-profiles.md`; inline the relevant rules into every brief, since agents start
    with empty context.
@@ -168,6 +187,36 @@ D="$SKILL_DIR/scripts/dispatch.sh"
    and never create a new `openspec/` inside a code repo.
 
 ## Pipeline
+
+**Fast lane is the default (owner, 2026-11-22).** For a feature with a clear spec and no data-write,
+permission, security or money risk: one Sol run (code + focused tests + one E2E pass) → one reviewer → Claude
+decides → push. No OpenSpec, red team or mutations. Use the full pipeline below only for risky paths or an unclear
+design. Target ≤ 2 h from first dispatch to PR.
+- One round = one deliverable. A feature asked for mid-round becomes the next round; orchestration tooling changes
+  wait until the product round ships unless they block it.
+- At round start, ask the owner once for every predictable permission (Docker, push, deploy), the scope cut and the
+  time budget.
+- Time boxes: code ≤ 45 min, review ≤ 15 min. Over budget → stop and ask the owner, not another loop.
+- Split independent parts (product code, E2E runner, docs) into parallel worktrees; review commit N while the coder
+  works on N+1.
+- Record lead time (first dispatch → MERGE-READY) in decision.md; the baseline is Post 3 (4.5 h round + 2.6 h).
+  Evidence: `agent-audit/workflow-review-2026-11-22.md`.
+
+**Size the gate to the risk (owner, 2026-11-22; Post 3 spent 2.3 h of coder time and 9 adjudications on one feature).**
+
+| Change | Review | Verification |
+|---|---|---|
+| Docs, tests, tooling only | 1 reviewer, no re-verify round | the replay or the affected tests |
+| UI code without data writes | 1 reviewer | focused tests + one E2E pass |
+| Data writes, permissions, persistence, security, money | 2 reviewers + red team | mutations, full E2E |
+
+- Send back only high and medium findings; log lows in `decision.md` for the next real change.
+- A new task gets a new session. Use `--resume` only to fix the review findings of that same task; resuming
+  unrelated work grows the context (one Sol session reached ~240K input tokens per turn).
+- Dispatch adds a `DISPATCHED AGENT` line to every brief, which `~/.codex/AGENTS.md` honours: the agent
+  works alone and spawns no sub-agents or reviewers (Sol had spawned 9, duplicating the orchestrator's review).
+- Put every input a writer must read inside its worktree (gitignored `.omc/`); writers cannot read outside it.
+- Run independent lanes in parallel. Before dispatching a review, check the reviewed head differs from its base.
 
 Each phase writes its artifacts into `$R` and ends with an audit record. Stop and ask the owner when scope or a
 product decision is unclear; do not let an agent guess it.
