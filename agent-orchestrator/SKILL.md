@@ -218,9 +218,11 @@ product decision is unclear; do not let an agent guess it.
 
 ## Audit
 
-At exit, dispatch publishes the final `runs/<label>.kv` and then appends one audit row with those fields,
-including for aborted and stalled runs. If the writer is unavailable or the append fails, dispatch prints
-`AUDIT_WRITER_MISSING` or `AUDIT_WRITE_FAILED` and updates the run note while preserving the run's outcome.
+The final `runs/<label>.kv` is the source of truth. Dispatch publishes it at exit and marks it
+`audited=1` after the audit row is present in `runs.jsonl`. If auditing fails, dispatch prints
+`AUDIT_PENDING` and leaves the record intact. The next launch, resume, close or decision retries pending
+final records in that round. Dispatch uses `flock` per record for auditing, decision updates and tab-close
+updates. It checks the ledger for an already appended row before retrying an unmarked record.
 
 Run labels, phases and round directory names start with an ASCII letter or digit and may also contain
 periods, underscores and hyphens. Model identifiers additionally allow slashes and colons. Decision notes
