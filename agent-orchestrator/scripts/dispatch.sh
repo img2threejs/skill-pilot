@@ -68,7 +68,7 @@ audit_row() {
 
 acquire_record_lock() {
   # Keep the descriptor open in the caller until it finishes writing.
-  exec {lock_fd}>> "$1.lock" && flock -x -w $(( ${DISPATCH_AUDIT_TIMEOUT:-15} + 5 )) -E 75 "$lock_fd"
+  exec {lock_fd}>> "$1.lock" && flock -x -w ${DISPATCH_LOCK_WAIT:-60} -E 75 "$lock_fd"
 }
 
 with_record_lock() (
@@ -898,10 +898,11 @@ if (( home_mode )); then
   fi
   home=$(ensure_herdr_home) || { print -ru2 -- "HERDR_HOME_FAILED: $il"; exit 1; }
   ws=$(jq -r .workspace_id <<< "$home")
-  if (( ${+o[--focus]} )); then herdr workspace focus "$ws" >/dev/null || print -ru2 -- "HERDR_FOCUS_FAILED: $ws"; fi
+  if (( ${+o[--focus]} )); then herdr workspace focus "$ws" >/dev/null || { print -ru2 -- "HERDR_FOCUS_FAILED: $ws"; exit 1; }; fi
+  setopt pipefail
   herdr tab list --workspace "$ws" |
     jq -c --argjson home "$home" '{home: $home, tabs: [.result.tabs[] | {tab_id, label, agent_status}]}'
-  exit 0
+  exit $?
 fi
 
 audit_id=$EPOCHREALTIME-$$

@@ -213,7 +213,7 @@ design. Target ≤ 2 h from first dispatch to PR.
 - Send back only high and medium findings; log lows in `decision.md` for the next real change.
 - A new task gets a new session. Use `--resume` only to fix the review findings of that same task; resuming
   unrelated work grows the context (one Sol session reached ~240K input tokens per turn).
-- Dispatch prefixes every brief with a `DISPATCHED AGENT` line, which `~/.codex/AGENTS.md` honours: the agent
+- Dispatch adds a `DISPATCHED AGENT` line to every brief, which `~/.codex/AGENTS.md` honours: the agent
   works alone and spawns no sub-agents or reviewers (Sol had spawned 9, duplicating the orchestrator's review).
 - Put every input a writer must read inside its worktree (gitignored `.omc/`); writers cannot read outside it.
 - Run independent lanes in parallel. Before dispatching a review, check the reviewed head differs from its base.
