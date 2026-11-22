@@ -29,6 +29,8 @@ brief can describe the task instead of restating the rules.
 | `distil` | turns a finished round into rules, so the next round starts further along |
 | `instruments` | how to tell a working measurement from one that reports success while measuring nothing |
 
+`agent-orchestrator` is the exception to "none of it is about a particular agent": it is a driver. Its `scripts/dispatch.sh` launches codex and pi through herdr, one tab per agent inside a dispatch-owned home workspace, and audits every run. Set the project root with `--il` or `HERDR_IL_PATH`.
+
 ## The one rule the rest of it serves
 
 A check that can only ever pass has not been shown to work. Break the property deliberately,
