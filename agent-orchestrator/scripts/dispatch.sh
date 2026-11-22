@@ -58,14 +58,14 @@ audit_row() {
     print -ru2 -- "$label: AUDIT_WRITER_MISSING: $writer"
     return 127
   fi
-  "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
+  timeout -k 1 2 "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
 }
 
 with_record_lock() (
   local record=$1 handler=$2 lock_fd
   shift 2
   # Keep a stable lock inode and pass its descriptor to the writer across exec.
-  exec {lock_fd}>> "$record.lock" && flock -x "$lock_fd" && "$handler" "$record" "$@"
+  exec {lock_fd}>> "$record.lock" && flock -x -w 2 "$lock_fd" && "$handler" "$record" "$@"
   # Propagate the handler's status when called from the run's EXIT trap.
   exit $?
 )
@@ -78,21 +78,21 @@ append_record_fields() {
 
 audit_record_pending() {
   local recorded_outcome
-  [[ -f $1 && ! -L $1 && $(kv_value "$1" audited) != 1 ]] || return 1
+  [[ -f $1 && ! -L $1 && $(kv_value "$1" audit) == pending && $(kv_value "$1" audited) != 1 ]] || return 1
   recorded_outcome=$(kv_value "$1" outcome)
   [[ -n $recorded_outcome && $recorded_outcome != running ]]
 }
 
 audit_record_locked() {
-  local record=$1 writer=$2 label=${1:t:r} ledger=${2:h}/runs.jsonl ledger_status
+  local record=$1 writer=$2 label=${1:t:r} ledger=${2:h}/runs.jsonl ledger_status audit_id
   local -a fields
   audit_record_pending "$record" || return 0
-  if [[ -e $ledger ]]; then
-    # A previous process can die after append but before marking the record.
-    jq -Ren --arg round "${round:t}" --arg label "$label" '
-      first(inputs | fromjson? | objects | select(.round == $round and .agent != "orchestrator" and
-        ((.label // "") == $label or ((.label // "") == "" and
-          ((.note // "") | startswith("label=" + $label + " ")))))) | true
+  audit_id=$(kv_value "$record" audit_id)
+  if [[ -n $audit_id && -f $ledger ]]; then
+    # Only this enrolled run's receipt can close the append-to-marker crash window.
+    jq -Ren --arg round "$(kv_value "$record" round)" --arg receipt "label=$label audit_id=$audit_id " '
+      first(inputs | fromjson? | objects | select(.round == $round and
+        (((.note | strings) // "") | startswith($receipt)))) | true
     ' "$ledger" >/dev/null
     ledger_status=$?
     case $ledger_status in
@@ -470,7 +470,7 @@ snapshot_siblings() {
 stage_run_record() {
   local -a fields=("round=${round:t}" "repo=${repo_top:t}" "label=$label" "phase=$phase" "agent=$agent"
     "model=$real_model" "effort=$effort" "launcher=$via" "access=$mode" "where=$where"
-    "secs=$secs" "exit=$1" "outcome=$outcome" "note=$note")
+    "secs=$secs" "exit=$1" "outcome=$outcome" "audit=pending" "audit_id=$audit_id" "note=$note")
   [[ -n $stalled ]] && fields+=("code=STALLED")
   [[ -n $branch ]] && fields+=("branch=$branch")
   if [[ -n $tab ]]; then
@@ -851,7 +851,8 @@ idle_writer_tab() {
       (.agent_status == "idle" or .agent_status == "done")' "$response" >/dev/null
 }
 
-outcome=running secs=0 note="label=$label via=$via mode=$mode"
+audit_id=$EPOCHREALTIME-$$
+outcome=running secs=0 note="label=$label audit_id=$audit_id via=$via mode=$mode"
 trap 'finish_run $?' EXIT
 trap 'abort_run 130' INT
 trap 'abort_run 143' TERM

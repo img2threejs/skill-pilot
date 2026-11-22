@@ -218,11 +218,14 @@ product decision is unclear; do not let an agent guess it.
 
 ## Audit
 
-The final `runs/<label>.kv` is the source of truth. Dispatch publishes it at exit and marks it
-`audited=1` after the audit row is present in `runs.jsonl`. If auditing fails, dispatch prints
-`AUDIT_PENDING` and leaves the record intact. The next launch, resume, close or decision retries pending
-final records in that round. Dispatch uses `flock` per record for auditing, decision updates and tab-close
-updates. It checks the ledger for an already appended row before retrying an unmarked record.
+The final `runs/<label>.kv` is the source of truth. New records start with `audit=pending`.
+Dispatch adds `audited=1` after the audit row is present in `runs.jsonl`. The next launch, resume,
+close or decision retries only final records with `audit=pending` that lack `audited=1`.
+A run-specific audit ID in the note lets retries recognize an append completed before the marker was saved.
+
+Dispatch uses `flock` and waits up to two seconds for each record lock. It gives the audit writer two
+seconds to finish, then one more second before forced termination. If a run audit times out or fails, dispatch prints
+`AUDIT_PENDING`, leaves the record intact and continues.
 
 Run labels, phases and round directory names start with an ASCII letter or digit and may also contain
 periods, underscores and hyphens. Model identifiers additionally allow slashes and colons. Decision notes
