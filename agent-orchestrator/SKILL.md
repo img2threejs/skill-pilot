@@ -220,7 +220,7 @@ product decision is unclear; do not let an agent guess it.
 
 The final `runs/<label>.kv` is the source of truth. New records start with `audit=pending`.
 Dispatch adds `audited=1` after the audit row is present in `runs.jsonl`. The next launch, resume,
-close or decision retries only final records with `audit=pending` that lack `audited=1`.
+close or successful decision retries only final records with `audit=pending` that lack `audited=1`.
 A run-specific audit ID in the note lets retries recognize an append completed before the marker was saved.
 
 Dispatch uses `flock` and waits up to two seconds for each record lock. It gives the audit writer two
@@ -245,7 +245,10 @@ Use `merge`, `send-back`, `accept` or `reject` for `--verdict`. This appends one
 row with `agent=orchestrator` and `model` from `DISPATCH_ORCHESTRATOR_MODEL` (default `unknown`).
 The decision label, referenced run labels and verdict are in the row's note. Each referenced
 `.kv` gets the supplied `findings_accepted` count and `verified_done=true` for merge or accept,
-or `verified_done=false` for send-back or reject. The latest values supersede earlier ones.
+or `verified_done=false` for send-back or reject. Dispatch acquires every referenced record lock before
+writing, holds them while updating the records and appending the decision row, and sweeps pending runs
+afterward. If any lock times out, it exits with `DECIDE_LOCK_TIMEOUT` before making any changes.
+The latest values supersede earlier ones.
 Runs and decisions use the same `agent-audit/log-run.sh` writer. For an audit directory outside the
 standard `agent-audit/rounds/<round>` layout, set `DISPATCH_AUDIT_DIR` to the directory containing `log-run.sh`.
 
