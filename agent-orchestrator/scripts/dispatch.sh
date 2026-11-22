@@ -3,7 +3,10 @@
 #
 # dispatch.sh --round <round_dir> --label <name> --agent codex|pi --model <id> [--effort low|medium|high|xhigh]
 #             --access write|read [--via herdr|exec] --cwd <git_dir> --brief <file> --phase <phase> [--timeout <sec>] [--resume <label>]
-#             [--stall <min>] [--herdr-home <label>] [--il <project_root>]
+#             [--stall <min>] [--herdr-home <label>] [--il <project_root>] [--keep-tmp]
+# dispatch.sh --home --il <project_root> [--herdr-home <label>] [--focus]
+#   Starts herdr if needed, ensures the project's workspace (label defaults to the project
+#   root's basename), prints {home, tabs} JSON, and with --focus switches herdr to it.
 # dispatch.sh --round <round_dir> --close <label>
 # dispatch.sh --decide --round <round_dir> --label <label> --of <labels> --verdict <verdict>
 #             --findings <n> --accepted <n> [--note <text>]
@@ -17,7 +20,8 @@
 set -u
 zmodload zsh/zutil zsh/datetime
 skill_dir=${0:A:h:h}
-zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: || exit 2
+zparseopts -D -E -F -A o -round: -label: -agent: -model: -effort: -access: -via: -cwd: -brief: -phase: -timeout: -resume: -close: -herdr-home: -il: -stall: -decide -of: -verdict: -findings: -accepted: -note: -home -focus -keep-tmp || exit 2
+keep_tmp=${+o[--keep-tmp]}
 il=${o[--il]:-${HERDR_IL_PATH:-}}
 valid_label() {
   local LC_ALL=C
@@ -58,12 +62,13 @@ audit_row() {
     print -ru2 -- "$label: AUDIT_WRITER_MISSING: $writer"
     return 127
   fi
-  timeout -k 1 2 "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
+  # The writer can take seconds on a loaded host; 2 s lost decision rows at load average ~140.
+  timeout -k 1 "${DISPATCH_AUDIT_TIMEOUT:-15}" "$writer" "$@" || { print -ru2 -- "$label: AUDIT_WRITE_FAILED"; return 1; }
 }
 
 acquire_record_lock() {
   # Keep the descriptor open in the caller until it finishes writing.
-  exec {lock_fd}>> "$1.lock" && flock -x -w 2 -E 75 "$lock_fd"
+  exec {lock_fd}>> "$1.lock" && flock -x -w $(( ${DISPATCH_AUDIT_TIMEOUT:-15} + 5 )) -E 75 "$lock_fd"
 }
 
 with_record_lock() (
@@ -279,6 +284,10 @@ if (( ${+o[--close]} )); then
   fi
   exit 0
 fi
+home_mode=${+o[--home]}
+if (( home_mode )); then
+  label=home agent= model= cwd=$PWD
+else
 for k in round label agent model access cwd brief phase; do [[ -n ${o[--$k]:-} ]] || { echo "missing --$k" >&2; exit 2; }; done
 round=${o[--round]:a} label=${o[--label]} agent=${o[--agent]} model=${o[--model]} effort=${o[--effort]:-medium}
 mode=${o[--access]} via=${o[--via]-herdr} cwd=${o[--cwd]:a} phase=${o[--phase]} tmo=${o[--timeout]:-1200}
@@ -309,6 +318,10 @@ if [[ $via == herdr ]]; then
 fi
 [[ -f "${o[--brief]}" && -s "${o[--brief]}" ]] || { echo "missing or empty brief: ${o[--brief]}" >&2; exit 2; }
 brief="$(<"${o[--brief]}")"
+# Dispatched agents work alone; their global instructions may tell them to delegate and self-review.
+brief="DISPATCHED AGENT (agent-orchestrator): you are the only worker on this task. Do it yourself: do not spawn, message or wait for sub-agents, and do not run your own review pass; the orchestrator runs independent review. Stay inside this brief's scope.
+
+$brief"
 repo_top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || { echo "not a git work tree: $cwd" >&2; exit 2; }
 sweep_audit_records
 base=$round/runs/$label; log=$base.log; out=$base.out.md; record_tmp=$base.kv.$$
@@ -317,6 +330,7 @@ mkdir -p "$round/runs" || exit 2
 if [[ $agent == pi ]]; then
   effort=-
   tmo=${o[--timeout]:-1500}
+fi
 fi
 
 export PYTHONDONTWRITEBYTECODE=1
@@ -615,8 +629,17 @@ abort_run() {
   detail="ABORTED${detail:+ ${detail# }}"
   if [[ -n $response && -s $response.err ]]; then cat "$response.err" >> "$log"; fi
   [[ -n $response ]] && rm -f -- "$response" "$response.err" "$base.launch"
-  [[ -n $scratch ]] && rm -rf -- "$scratch"
+  [[ -n $scratch ]] && drop_scratch
   exit "$1"
+}
+
+# --keep-tmp: readers whose deliverables are files (QA runs, screenshots) keep their scratch as <label>.kept.
+drop_scratch() {
+  if (( keep_tmp )); then
+    mv -- "$scratch" "$base.kept"
+  else
+    rm -rf -- "$scratch"
+  fi
 }
 
 herdr_pane_input_fits() {
@@ -865,6 +888,22 @@ idle_writer_tab() {
       (.agent_status == "idle" or .agent_status == "done")' "$response" >/dev/null
 }
 
+if (( home_mode )); then
+  [[ -n $il && -d $il && $il != *[[:cntrl:]]* ]] || { print -ru2 -- 'HERDR_IL_REQUIRED: pass --il <project_root>'; exit 2; }
+  il=${il:A}
+  home_label=${o[--herdr-home]:-${DISPATCH_HERDR_HOME:-${il:t}}}
+  if ! timeout -k 2 10 herdr workspace list >/dev/null 2>&1; then
+    tmux has-session -t herdr-host 2>/dev/null || tmux new -d -s herdr-host herdr || { print -ru2 -- HERDR_NOT_RUNNING; exit 1; }
+    for _ in {1..50}; do timeout -k 2 10 herdr workspace list >/dev/null 2>&1 && break; sleep .2; done
+  fi
+  home=$(ensure_herdr_home) || { print -ru2 -- "HERDR_HOME_FAILED: $il"; exit 1; }
+  ws=$(jq -r .workspace_id <<< "$home")
+  if (( ${+o[--focus]} )); then herdr workspace focus "$ws" >/dev/null || print -ru2 -- "HERDR_FOCUS_FAILED: $ws"; fi
+  herdr tab list --workspace "$ws" |
+    jq -c --argjson home "$home" '{home: $home, tabs: [.result.tabs[] | {tab_id, label, agent_status}]}'
+  exit 0
+fi
+
 audit_id=$EPOCHREALTIME-$$
 outcome=running secs=0 note="label=$label audit_id=$audit_id via=$via mode=$mode"
 trap 'finish_run $?' EXIT
@@ -896,8 +935,8 @@ if (( ${+o[--resume]} )); then
 fi
 
 if [[ $via == herdr ]]; then
-  home_label=${o[--herdr-home]:-${DISPATCH_HERDR_HOME:-img2}}
   il=${il:A} repo_top=${repo_top:A} cwd=${cwd:A} where=${cwd:A}
+  home_label=${o[--herdr-home]:-${DISPATCH_HERDR_HOME:-${il:t}}}
   [[ $repo_top == "${il%/}/"* && $cwd == "${il%/}/"* ]] || { echo "git work tree is outside il: $cwd" >&2; exit 2; }
   response=$base.herdr.json
   : > "$log"
@@ -1259,7 +1298,7 @@ elif [[ $mode == write && -n $events ]]; then
 fi
 
 if [[ -n $scratch ]]; then
-  rm -rf -- "$scratch" || { rc=1; detail="$detail TMP_CLEANUP_FAILED"; }
+  drop_scratch || { rc=1; detail="$detail TMP_CLEANUP_FAILED"; }
 fi
 if (( rc == 0 )) && [[ ! -s $out ]]; then rc=1; detail="$detail NO_REPORT"; fi
 case $rc in
